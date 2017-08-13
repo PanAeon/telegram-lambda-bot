@@ -1,0 +1,51 @@
+name:                lambda-bot
+version:             0.1.0.0
+homepage:            https://github.com/githubuser/lambda-bot#readme
+license:             BSD3
+
+ghc-options: -Wall
+
+tests:
+  spec:
+    main: Spec.hs
+    source-dirs:
+      - test
+    dependencies:
+      - hspec
+      - lambda-bot
+      - warp >= 3.2.4
+      - http-types
+
+library:
+  source-dirs:
+    - src
+
+executables:
+  lambda-bot:
+    main: app/Main.hs
+    dependencies:
+      - lambda-bot
+
+dependencies:
+  - base
+  - servant
+  - servant-server
+  - http-client
+  - servant-client
+  - transformers
+  - mtl
+  - aeson
+  - wai
+  - warp
+  - containers
+  - unordered-containers
+  - monad-loops
+  - optparse-applicative
+  - bytestring
+  - MissingH
+  - either
+  - text
+  - vector
+  - parsers
+  - parsec
+  - trifecta
