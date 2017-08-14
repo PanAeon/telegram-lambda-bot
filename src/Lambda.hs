@@ -14,7 +14,7 @@ import Text.Parsec (ParseError)
 import Text.Parsec.Token(lexeme)
 import Text.Parsec.String (Parser)
 import Text.Parsec.Prim (parse, try, (<?>))
-import Text.Parsec.Char (oneOf, char, digit, letter, satisfy)
+import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string)
 import Text.Parsec.Combinator (many1, chainl1, between, eof, optionMaybe,sepBy, notFollowedBy, anyToken)
 import Control.Applicative ((<$>), (<**>), (<*>), (<*), (*>), (<|>), many, (<$))
 import Control.Monad (void, ap)
@@ -29,7 +29,10 @@ import qualified Control.Monad.Writer as Writer
 
 data Variable = Variable Char
 
-data Expr = Var Char  | App Expr Expr | Lambda Char Expr -- | const
+
+data Cmd = Help 
+
+data Expr = Var Char  | App Expr Expr | Lambda Char Expr | Val String -- | const
             deriving (Show, Eq)
 
 
@@ -81,6 +84,19 @@ expr =
         <|>  variable
         <|> parens app -- left factoring !! doesn't work both have parens!
 -}
+
+valP :: Parser Expr
+valP = fmap Val $ (:) <$> oneOf ['A'..'Z'] <*> many (oneOf $ '_':'\'':['A'..'Z']++['a'..'z']++['0'..'9'] ) -- FIXME: efficiency
+
+---- ATTENTION conflict in the beginning of line "A" - val definition or denomination?
+valDef :: Parser (String, Expr)
+valDef = (,) <$> ((fmap getValName valP) <* ws <* char '=' <* ws) <*> expr''
+
+
+
+getValName :: Expr -> String
+getValName (Val name) = name
+getValName _ = error "trying to get name of Expr"
 
 app :: Parser Expr
 app =  App <$> (expr' <* ws') <*> (expr')
