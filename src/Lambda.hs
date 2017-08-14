@@ -255,7 +255,7 @@ traceOrFail s = either (\err -> "Сорян, хуйня какя-то. " ++ show
   where
     maybeExpr = parseExpression s
     myres     = fmap eval maybeExpr
-    eval ex   = concat $ fmap (\x -> "\n==> " ++ x) xs
+    eval ex   = concat $ fmap (\x -> "\n==> " ++ x) res
       where
         (r, xs) = Writer.runWriter $ beta' id $ ex
         rs = pprint r

@@ -19,11 +19,12 @@ import           System.IO
 import           Lambda(beta'', parseExpression, traceOrFail)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
+import           Debug.Trace(trace, traceShow, traceShowId)
 
 -- * api
 
 type ItemApi =
-  "new-message" :> ReqBody '[JSON] TelegramMessage  :>  Get '[PlainText] String :<|>
+  "new-message" :> ReqBody '[JSON] TelegramMessage  :>  Post '[PlainText] String :<|>
   "item" :> Get '[JSON] [Item] :<|>
   "item" :> Capture "itemId" Integer :> Get '[JSON] Item
 
@@ -84,14 +85,15 @@ exampleItem = Item 0 "example item"
 
 -}
 
-type TelegramAPI =  ReqBody '[JSON] SendMessage  :> Capture "api_token" String :> "sendMessage" :> Get '[PlainText] String
+type TelegramAPI =  ReqBody '[JSON] SendMessage  :> Capture "api_token" String :> "sendMessage" :> Post '[JSON] SentMessage
 
 telegramAPI :: Proxy TelegramAPI
 telegramAPI = Proxy
 
+sendMessage :: SendMessage -> [Char] -> ClientM SentMessage
 sendMessage  = client telegramAPI
 
-queries :: SendMessage -> String -> ClientM [Char]
+queries :: SendMessage -> String -> ClientM SentMessage
 queries msg token = sendMessage msg ("bot" ++ token)
 
 -- http://www.sohamkamani.com/blog/2016/09/21/making-a-telegram-bot/
@@ -103,7 +105,7 @@ doSendMsg  msg = do
   case res of
     Left err -> putStrLn $ "Error: " ++ show err
     Right (resp) -> do
-      putStrLn resp
+      putStrLn $ show resp
 
 -- * Client
 
@@ -139,6 +141,13 @@ instance ToJSON SendMessage where
 
 
 
+data SentMessage = SentMessage {
+    _random_id:: Integer
+  } deriving (Generic, Show)
+
+instance FromJSON SentMessage where
+      parseJSON = genericParseJSON defaultOptions {
+                   fieldLabelModifier = drop 1 }
 
 data Item
   = Item {
