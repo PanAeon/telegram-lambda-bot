@@ -6,6 +6,11 @@ import           Test.Hspec
 spec :: Spec
 spec = do
   describe "lambda" $ do
+      describe "var parser" $ do
+        it "should parse single letter var in" $
+          regularParse valP "A" `shouldBe` Right (Val "A")
+        it "should parse multi  letter var in" $
+          regularParse valP "AbCd_z'" `shouldBe` Right (Val "AbCd_z'")
       describe "parser" $  do
         it "should parse simple expr"  $
           parseExpression "\\f.\\x.f (f ((\\x.x) x))" `shouldBe` Right (Lambda 'f' (Lambda 'x' (App (Var 'f') (App (Var 'f') (App (Lambda 'x' (Var 'x')) (Var 'x'))))))

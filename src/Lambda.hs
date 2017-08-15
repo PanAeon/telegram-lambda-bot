@@ -1,11 +1,14 @@
 module Lambda(
         Expr(..)
       , parseExpression
+      , regularParse
       , parseOrFail
       , beta
       , beta'
       , beta''
       , traceOrFail
+      , valP
+      , valDef
 
 
 ) where
@@ -30,7 +33,7 @@ import qualified Control.Monad.Writer as Writer
 data Variable = Variable Char
 
 
-data Cmd = Help 
+data Cmd = Help
 
 data Expr = Var Char  | App Expr Expr | Lambda Char Expr | Val String -- | const
             deriving (Show, Eq)
