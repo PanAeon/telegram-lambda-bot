@@ -39,6 +39,7 @@ library
     , trifecta
   exposed-modules:
       App
+      GentleMonadTransformers
       Lambda
   default-language: Haskell2010
 

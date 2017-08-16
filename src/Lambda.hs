@@ -29,6 +29,10 @@ import Debug.Trace(trace, traceShow, traceShowId)
 import Control.Monad.Writer(Writer,tell)
 import qualified Control.Monad.Writer as Writer
 --import Control.Applicative
+import Control.Monad.Trans.Class(lift)
+import Control.Monad.Trans.Except
+import Data.HashMap.Lazy(HashMap)
+import qualified Data.HashMap.Lazy as HM
 
 data Variable = Variable Char
 
@@ -255,6 +259,33 @@ beta' ctxt v@(Var _) = return v
 
 
 
+data EvaluationError = VariableNotFoundException String deriving Show
+
+--- FIXME: either evaluate val recursively or pass ExceptT down
+extractVal :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr -- FIXME: maybe either is enough?
+extractVal hm (Val v) = maybe (throwE $ VariableNotFoundException v) (return) (HM.lookup v hm)
+extractVal _ expr = return expr
+
+cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
+cbn''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
+cbn''' hm ctxt v@(Var _) = return v
+cbn''' hm ctxt l@(Lambda _ _) = return l
+cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
+                          case e1' of
+                            l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (cbn''' hm ctxt)
+                            _              -> return $ App e1' e2
+
+
+-- FIXME: user bloody reader, merge contexts
+-- FIXME: substc ctxt l e2 <-- Vals in expressions!
+beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
+beta''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (beta''' hm ctxt) (HM.lookup v hm)
+beta''' hm ctxt (App e1 e2) =  (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
+                             case e1' of
+                               l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (beta''' hm (ctxt))
+                               _              -> App <$> (beta''' hm (ctxt . app1C e2) e1') <*> (beta''' hm (ctxt . app2C e1') e2)
+beta''' hm ctxt (Lambda v e) = fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
+beta''' hm ctxt v@(Var _) = return v
 
 
 runTestA = do
@@ -301,6 +332,7 @@ pprint (App a@(App _ _) b) =    pprint a ++ " " ++ pprint b
 pprint (App l@(Lambda _ _) b) = "(" ++ pprint l ++ ")" ++ " " ++ pprint b
 pprint (App a b) = "" ++ pprint a ++ " " ++ pprint b ++ ""
 pprint (Lambda x b) =  "λ" ++ [x] ++ "." ++ pprint b
+pprint (Val v) = v
 --pprint (Lambda x b) = "\\" ++ [x] ++ "." ++ "(" ++ pprint b ++ ")"
 
 test0 = "\\f.\\x.f ((\\n.\\f.\\x.f (n f x)) (\\f.\\x.x) f x)"
