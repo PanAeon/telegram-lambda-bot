@@ -20,7 +20,7 @@ import Text.Parsec.Prim (parse, try, (<?>))
 import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string)
 import Text.Parsec.Combinator (many1, chainl1, between, eof, optionMaybe,sepBy, notFollowedBy, anyToken)
 import Control.Applicative ((<$>), (<**>), (<*>), (<*), (*>), (<|>), many, (<$))
-import Control.Monad (void, ap)
+import Control.Monad (void, ap, liftM2)
 import Data.Char (isLetter, isDigit)
 import qualified Data.Vector as V
 import Data.Char(digitToInt)
@@ -177,15 +177,14 @@ subst c e2 l@(Lambda y f) | c == y = l
                                           Lambda y (subst c e2 f)
 
 
-needsAlpha :: Expr -> Expr -> Bool
-needsAlpha e2 (Lambda y _) = elem (y) (freeV e2)
-needsAlpha _ _             = False
+needsAlpha :: [Char] -> Expr  -> Bool
+needsAlpha fv (Lambda y _)  = elem (y) fv
+needsAlpha _ _              = False
 
-fixFreeVars :: Expr -> Expr -> (Char, Expr)
-fixFreeVars e2 (Lambda x e1) = (s, alpha x s e1)
+fixFreeVars :: [Char] -> Expr -> (Char, Expr)
+fixFreeVars fv (Lambda x e1) = (s, alpha x s e1)
    where
      symbols = ['a'..'z']
-     fv      = freeV e2
      s       = maybe (error "not enough vars!") id $ find (\z -> not $ elem z fv) symbols
 
 
@@ -200,8 +199,8 @@ isLambda _ = False
 -- FIXME: trace, single step
 
 subst' :: Expr -> Expr -> Expr
-subst' l@(Lambda v e1) e2 = if needsAlpha e2 l then
-                              let (v', e1') = fixFreeVars e2 l
+subst' l@(Lambda v e1) e2 = if needsAlpha (freeV e2) l then
+                              let (v', e1') = fixFreeVars (freeV e2) l
                               in subst v' e2 e1'
                             else
                                subst v e2 e1
@@ -232,8 +231,8 @@ app2C e1  = App e1
 app1C e2  = flip (App) e2
 
 substc :: Ctxt -> Expr -> Expr -> Writer [String] Expr
-substc ctxt l@(Lambda v e1) e2 = if  needsAlpha e2 l then
-                              let (v', e1') = fixFreeVars e2 l
+substc ctxt l@(Lambda v e1) e2 = if  needsAlpha (freeV e2) l then
+                              let (v', e1') = fixFreeVars (freeV e2) l
                               in do
                                  tell $ [pprint $ ctxt $ App l e2]
                                  return $ subst v' e2 e1'
@@ -261,6 +260,13 @@ beta' ctxt v@(Var _) = return v
 
 data EvaluationError = VariableNotFoundException String deriving Show
 
+
+getFreeV :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) [Char]
+getFreeV hm (Var x) = return [x]
+getFreeV hm (Lambda x t) = fmap (delete x) $ getFreeV hm t
+getFreeV hm (App e1 e2) = liftM2 union  (getFreeV hm e1) (getFreeV hm e2)
+getFreeV hm (Val v) = maybe (throwE $ VariableNotFoundException v) (getFreeV hm) (HM.lookup v hm)
+
 --- FIXME: either evaluate val recursively or pass ExceptT down
 extractVal :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr -- FIXME: maybe either is enough?
 extractVal hm (Val v) = maybe (throwE $ VariableNotFoundException v) (return) (HM.lookup v hm)
@@ -272,17 +278,28 @@ cbn''' hm ctxt v@(Var _) = return v
 cbn''' hm ctxt l@(Lambda _ _) = return l
 cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                           case e1' of
-                            l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (cbn''' hm ctxt)
+                            l@(Lambda x e) -> (extractVal hm e2) >>= (\x -> fmap (\y -> (x,y)) (getFreeV hm e2)) >>= (\e2' -> lift $ substc''' ctxt l (fst e2') (snd e2')) >>= (cbn''' hm ctxt) -- FIXME: wrong? don't need to extract val
                             _              -> return $ App e1' e2
 
 
+
+
+substc''' :: Ctxt -> Expr -> Expr -> [Char] -> Writer [String] Expr
+substc''' ctxt l@(Lambda v e1) e2 fw = if  needsAlpha fw l then
+                              let (v', e1') = fixFreeVars fw l
+                              in do
+                                 tell $ [pprint $ ctxt $ App l e2]
+                                 return $ subst v' e2 e1'
+                            else do
+                                 tell $ [pprint $ ctxt $ App l e2]
+                                 return $ subst v e2 e1
 -- FIXME: user bloody reader, merge contexts
 -- FIXME: substc ctxt l e2 <-- Vals in expressions!
 beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
 beta''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (beta''' hm ctxt) (HM.lookup v hm)
 beta''' hm ctxt (App e1 e2) =  (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
-                               l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (beta''' hm (ctxt))
+                               l@(Lambda x e) -> (extractVal hm e2) >>= (\x -> fmap (\y -> (x,y)) (getFreeV hm e2)) >>= (\e2' -> lift $ substc''' ctxt l (fst e2')(snd e2')) >>= (beta''' hm (ctxt))
                                _              -> App <$> (beta''' hm (ctxt . app1C e2) e1') <*> (beta''' hm (ctxt . app2C e1') e2)
 beta''' hm ctxt (Lambda v e) = fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
 beta''' hm ctxt v@(Var _) = return v
@@ -384,8 +401,8 @@ throw = Left
 
 
 substd :: Ctxt -> Expr -> Expr -> Exception Expr Expr
-substd ctxt l@(Lambda v e1) e2 = if  needsAlpha e2 l then
-                              let (v', e1') = fixFreeVars e2 l
+substd ctxt l@(Lambda v e1) e2 = if  needsAlpha (freeV e2) l then
+                              let (v', e1') = fixFreeVars (freeV e2) l
                               in do
                                 --  tell $ [pprint $ ctxt $ App l e2]
                                  throw $ ctxt $ subst v' e2 e1'
