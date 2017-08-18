@@ -20,7 +20,7 @@ import Text.Parsec.Prim (parse, try, (<?>))
 import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string)
 import Text.Parsec.Combinator (many1, chainl1, between, eof, optionMaybe,sepBy, notFollowedBy, anyToken)
 import Control.Applicative ((<$>), (<**>), (<*>), (<*), (*>), (<|>), many, (<$))
-import Control.Monad (void, ap)
+import Control.Monad (void, ap, liftM2)
 import Data.Char (isLetter, isDigit)
 import qualified Data.Vector as V
 import Data.Char(digitToInt)
@@ -265,6 +265,54 @@ data EvaluationError = VariableNotFoundException String deriving Show
 extractVal :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr -- FIXME: maybe either is enough?
 extractVal hm (Val v) = maybe (throwE $ VariableNotFoundException v) (return) (HM.lookup v hm)
 extractVal _ expr = return expr
+
+
+
+subst''' :: HashMap String Expr -> Char -> Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
+subst''' hm c e2 (Val v) =  maybe (throwE $ VariableNotFoundException v) (subst''' hm c e2) (HM.lookup v hm)
+subst''' hm c e2 v@(Var y) | c == y       = return e2
+                           | otherwise    = return v
+subst''' hm c e2 (App a b)  = App <$> (subst''' hm c e2 a) <*> (subst''' hm c e2 b)
+subst''' hm c e2 l@(Lambda y f) | c == y = return l
+                                | otherwise = if elem c (freeV e2)
+                                        then
+                                          error $ "error in subst: '" ++ [c] ++ "' in FW " ++ (show e2)
+                                        else
+                                          fmap (Lambda y) (subst''' hm c e2 f)
+
+
+ifM :: Monad m => m Bool -> m a -> m a -> m a
+ifM b t f = do b <- b; if b then t else f
+
+freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) [Char] -- FIXME: this method is not writer !!!
+freeV''' hm (Val v) = maybe (throwE $ VariableNotFoundException v) (freeV''' hm) (HM.lookup v hm)
+freeV''' _ (Var x) = return [x]
+freeV''' hm (Lambda x t) = fmap (delete x) $ freeV''' hm t
+freeV''' hm (App e1 e2) = (liftM2 union) (freeV''' hm e1) (freeV''' hm e2)
+
+
+needsAlpha''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Bool -- FIXME: this method is not writer !!!
+needsAlpha''' hm e2 (Lambda y _) = fmap (elem y) (freeV''' hm e2)
+needsAlpha''' _  _  (Val v)     = error "needsAlpha''' Val is not implemented!!"
+needsAlpha''' _ _ _             = return False
+
+fixFreeVars''' :: Expr -> Expr -> (Char, Expr)
+fixFreeVars''' e2 (Lambda x e1) = (s, alpha x s e1)
+   where
+     symbols = ['a'..'z']
+     fv      = freeV e2
+     s       = maybe (error "not enough vars!") id $ find (\z -> not $ elem z fv) symbols
+
+substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
+substc''' hm ctxt l@(Lambda v e1) e2 = ifM  (needsAlpha''' hm e2 l) (
+                              let (v', e1') = fixFreeVars e2 l
+                              in do
+                                 lift $ tell $ [pprint $ ctxt $ App l e2]
+                                 subst''' hm v' e2 e1'
+                              ) (do
+                                 lift $ tell $ [pprint $ ctxt $ App l e2]
+                                 subst''' hm v e2 e1)
+
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
 cbn''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
