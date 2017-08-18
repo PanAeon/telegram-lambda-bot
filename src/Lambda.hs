@@ -9,6 +9,7 @@ module Lambda(
       , traceOrFail
       , valP
       , valDef
+      , beta'''
 
 
 ) where
@@ -81,6 +82,7 @@ expr :: Parser Expr
 expr =
         lambda
         <|> variable
+        <|> valP
         <|> (parens expr')
         -- left factoring !! rubbish ))
 
@@ -109,13 +111,13 @@ app :: Parser Expr
 app =  App <$> (expr' <* ws') <*> (expr')
 
 lambda :: Parser Expr
-lambda =  Lambda <$> (  lambdaLit *> ws *> letter <* ws <* char '.' <* ws) <*> (expr' <* ws )
+lambda =  Lambda <$> (  lambdaLit *> ws *> (oneOf ['a'..'z']) <* ws <* char '.' <* ws) <*> (expr' <* ws )
 
 lambdaLit :: Parser Char
 lambdaLit = oneOf ['\\', 'λ', '+']
 
 variable :: Parser Expr
-variable = fmap Var letter
+variable = fmap Var $ oneOf ['a'..'z']
 
 --constant :: Parser Expr
 --constant = fmap (Const . digitToInt) digit
@@ -274,15 +276,33 @@ subst''' hm c e2 v@(Var y) | c == y       = return e2
                            | otherwise    = return v
 subst''' hm c e2 (App a b)  = App <$> (subst''' hm c e2 a) <*> (subst''' hm c e2 b)
 subst''' hm c e2 l@(Lambda y f) | c == y = return l
-                                | otherwise = if elem c (freeV e2)
-                                        then
-                                          error $ "error in subst: '" ++ [c] ++ "' in FW " ++ (show e2)
-                                        else
-                                          fmap (Lambda y) (subst''' hm c e2 f)
+                                | otherwise = do
+                                              freeVNotFixed <- fmap (elem c) (freeV''' hm e2)
+                                              if freeVNotFixed
+                                                 then
+                                                   error $ "error in subst: '" ++ [c] ++ "' in FW " ++ (show e2)
+                                                 else
+                                                   fmap (Lambda y) (subst''' hm c e2 f)
 
 
-ifM :: Monad m => m Bool -> m a -> m a -> m a
-ifM b t f = do b <- b; if b then t else f
+-- ifM :: Monad m => m Bool -> m a -> m a -> m a
+-- ifM b t f = do b <- b; if b then t else f
+
+
+
+alpha''':: HashMap String Expr -> Char -> Char -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
+alpha''' hm x z (Val v) = maybe (throwE $ VariableNotFoundException v) (alpha''' hm x z) (HM.lookup v hm)
+alpha''' hm x z (Var y) | x == y    = return $ Var z
+                        | otherwise =  return  $ Var y
+alpha''' hm x z (App a b) = App <$> (alpha''' hm x z a) <*> (alpha''' hm x z b)
+alpha''' hm x z (Lambda y f) | x == y = return $ Lambda y f -- ???
+                             | otherwise = do
+                                           freeVNotFixed <- fmap (elem z) (freeV''' hm f)
+                                           if freeVNotFixed
+                                           then
+                                             error "x in FV (f)"
+                                           else
+                                             fmap (Lambda y) (alpha''' hm x z f)
 
 freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (Writer [String]) [Char] -- FIXME: this method is not writer !!!
 freeV''' hm (Val v) = maybe (throwE $ VariableNotFoundException v) (freeV''' hm) (HM.lookup v hm)
@@ -296,31 +316,49 @@ needsAlpha''' hm e2 (Lambda y _) = fmap (elem y) (freeV''' hm e2)
 needsAlpha''' _  _  (Val v)     = error "needsAlpha''' Val is not implemented!!"
 needsAlpha''' _ _ _             = return False
 
-fixFreeVars''' :: Expr -> Expr -> (Char, Expr)
-fixFreeVars''' e2 (Lambda x e1) = (s, alpha x s e1)
-   where
-     symbols = ['a'..'z']
-     fv      = freeV e2
-     s       = maybe (error "not enough vars!") id $ find (\z -> not $ elem z fv) symbols
+
+fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (Writer [String]) (Char, Expr) -- FIXME: this method is not writer !!!
+fixFreeVars''' hm e2 (Lambda x e1) = do
+                                         let symbols = ['a'..'z']
+                                         fv      <- freeV''' hm e2
+                                         let s       = maybe (error "not enough vars!") id $ find (\z -> not $ elem z fv) symbols
+                                         fmap (\x -> (s,x)) (alpha''' hm x s e1)
+
+
+
+
 
 substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
-substc''' hm ctxt l@(Lambda v e1) e2 = ifM  (needsAlpha''' hm e2 l) (
-                              let (v', e1') = fixFreeVars e2 l
-                              in do
-                                 lift $ tell $ [pprint $ ctxt $ App l e2]
-                                 subst''' hm v' e2 e1'
-                              ) (do
-                                 lift $ tell $ [pprint $ ctxt $ App l e2]
-                                 subst''' hm v e2 e1)
+substc''' hm ctxt l@(Lambda v e1) e2 =
+    do
+      needsAlpha <- needsAlpha''' hm e2 l
+      if (needsAlpha)
+      then do
+            (v', e1') <- fixFreeVars''' hm e2 l
+            lift $ tell $ [pprint $ ctxt $ App l e2]
+            subst''' hm v' e2 e1'
+      else do
+            lift $ tell $ [pprint $ ctxt $ App l e2]
+            subst''' hm v e2 e1
+
+
+                              -- ifM  (needsAlpha''' hm e2 l) (
+                              -- let (v', e1') = fixFreeVars e2 l
+                              -- in do
+                              --    lift $ tell $ [pprint $ ctxt $ App l e2]
+                              --    subst''' hm v' e2 e1'
+                              -- ) (do
+                              --    lift $ tell $ [pprint $ ctxt $ App l e2]
+                              --    subst''' hm v e2 e1)
 
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
-cbn''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
+cbn''' hm ctxt (Val v) = traceShowId $ maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
 cbn''' hm ctxt v@(Var _) = return v
 cbn''' hm ctxt l@(Lambda _ _) = return l
 cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                           case e1' of
-                            l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (cbn''' hm ctxt)
+                            l@(Lambda x e) ->  (substc''' hm ctxt l e2) >>= (cbn''' hm ctxt)
                             _              -> return $ App e1' e2
 
 
@@ -330,7 +368,7 @@ beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Write
 beta''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (beta''' hm ctxt) (HM.lookup v hm)
 beta''' hm ctxt (App e1 e2) =  (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
-                               l@(Lambda x e) -> (extractVal hm e2) >>= (\e2' -> lift $ substc ctxt l e2') >>= (beta''' hm (ctxt))
+                               l@(Lambda x e) ->  (substc''' hm ctxt l e2) >>= (beta''' hm (ctxt))
                                _              -> App <$> (beta''' hm (ctxt . app1C e2) e1') <*> (beta''' hm (ctxt . app2C e1') e2)
 beta''' hm ctxt (Lambda v e) = fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
 beta''' hm ctxt v@(Var _) = return v
@@ -347,6 +385,15 @@ runTestB s = do
            putStrLn $ "==> " ++ pprint r
   where
      (r, xs) = Writer.runWriter $ beta' id $ parseOrFail s
+
+runTestC =  case resOrFail of
+             Left (VariableNotFoundException v) -> putStrLn $ "no such var " ++ v
+             Right (r) -> do
+                                sequence $ fmap (\x -> putStrLn $ "==> " ++ x) xs
+                                putStrLn $ "==> " ++ pprint r
+       where
+          (resOrFail, xs) = Writer.runWriter $ runExceptT (beta''' hm id $ parseOrFail "(λn.λf.λx.f (n f X)) (λf.λx.f (f X))")
+          hm = HM.fromList [ ("X", Var 'x'), ("Y", Var 'y')]
 
 traceOrFail :: String -> String
 traceOrFail s = either (\err -> "Сорян, хуйня какя-то. " ++ show err) id myres
