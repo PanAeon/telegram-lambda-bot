@@ -392,8 +392,8 @@ runTestC =  case resOrFail of
                                 sequence $ fmap (\x -> putStrLn $ "==> " ++ x) xs
                                 putStrLn $ "==> " ++ pprint r
        where
-          (resOrFail, xs) = Writer.runWriter $ runExceptT (beta''' hm id $ parseOrFail "(λn.λf.λx.f (n f X)) (λf.λx.f (f X))")
-          hm = HM.fromList [ ("X", Var 'x'), ("Y", Var 'y')]
+          (resOrFail, xs) = Writer.runWriter $ runExceptT (beta''' hm id $ parseOrFail "(λn.λf.λx.f (n f X)) Y")
+          hm = HM.fromList [ ("X", Var 'x'), ("Y", parseOrFail "(λf.λx.f (f X))")]
 
 traceOrFail :: String -> String
 traceOrFail s = either (\err -> "Сорян, хуйня какя-то. " ++ show err) id myres

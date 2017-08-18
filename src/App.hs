@@ -16,11 +16,14 @@ import           Network.HTTP.Client (newManager, defaultManagerSettings)
 import           Servant
 import           Servant.Client
 import           System.IO
-import           Lambda(beta'', parseExpression, traceOrFail)
+import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Debug.Trace(trace, traceShow, traceShowId)
-
+import           Data.HashMap.Lazy(HashMap)
+import qualified Data.HashMap.Lazy as HM
+import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, modifyTVar)
+import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 -- * api
 
 type ItemApi =
@@ -32,6 +35,16 @@ itemApi :: Proxy ItemApi
 itemApi = Proxy
 
 -- * app
+-- last command, history
+-- TODO: Seq[String] history
+-- FIXME: last modified time
+-- TODO: storage limit?
+data ChatSettings = ChatSettings
+data ChatSession = ChatSession (HashMap String Expr) ChatSettings
+type SessionStorage = HashMap String ChatSession
+
+sessionStorage :: TVar SessionStorage
+sessionStorage = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO HM.empty
 
 run :: IO ()
 run = do
@@ -53,6 +66,7 @@ server =
 
 newMessage :: TelegramMessage -> Handler String
 newMessage msg = do
+                 session <- liftIO $ atomically $ modifyTVar sessionStorage id
                  liftIO $ doSendMsg (SendMessage chatId errOrRes)
                  return ""
         where
