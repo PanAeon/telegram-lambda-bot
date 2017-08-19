@@ -13,11 +13,12 @@ import           GHC.Generics
 import           Network.Wai
 import           Network.Wai.Handler.Warp
 import           Network.Wai.Logger       (withStdoutLogger)
-import           Network.HTTP.Client (newManager, defaultManagerSettings)
+import           Network.HTTP.Client(newManager)
+import           Network.HTTP.Client.TLS( tlsManagerSettings)
 import           Servant
 import           Servant.Client
 import           System.IO
-import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr, looksLikeValueDef, regularParse, valDef, traceOrFail''')
+import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr, looksLikeValueDef, regularParse, valDef, traceOrFail''', basicVals)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Debug.Trace(trace, traceShow, traceShowId)
@@ -50,13 +51,13 @@ sessionStorage :: TVar SessionStorage
 sessionStorage = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO HM.empty
 
 telegramAPIKey :: String
-telegramAPIKey =  unsafePerformIO $
+telegramAPIKey =  unsafePerformIO $ unsafeInterleaveIO $
                    do
-                   maybePort <- lookupEnv "PORT"
+                   maybeKey <- lookupEnv "TelegramAPIKey"
                    maybe
-                     (putStrLn "TelegramAPIKey not found! using stub!" >> return "<apikey>")
-                     (return)
-                     maybePort
+                     (putStrLn "TelegramAPIKey not found! using stub!" >> return "412409218:AAENUs0Or0BPQUSgAuzP9hvVm5O5oKpeH9g")
+                     (\key -> putStrLn ("Key" ++ key) >>  return key)
+                     maybeKey
 
 
 run :: IO ()
@@ -82,7 +83,7 @@ server =
 
 getVals chatId ss = hm
   where
-    (ChatSession hm _) = HM.lookupDefault (ChatSession HM.empty ChatSettings) chatId ss
+    (ChatSession hm _) = HM.lookupDefault (ChatSession basicVals ChatSettings) chatId ss
 
 newMessage :: TelegramUpdate -> Handler String
 newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just msgText)))) =
@@ -93,7 +94,7 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
          Right (name, e) -> liftIO $ atomically $  modifyTVar sessionStorage (\storage ->
                                 let
                                   update _ (ChatSession hm s)  = ChatSession (HM.insert name e hm) s
-                                in HM.insertWith update chatId (ChatSession (HM.singleton name e) ChatSettings) storage
+                                in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
 
                             )
      else
@@ -144,8 +145,8 @@ queries msg token = sendMessage msg ("bot" ++ token)
 
 doSendMsg :: SendMessage -> IO ()
 doSendMsg  msg = do
-  manager <- newManager defaultManagerSettings
-  res <- runClientM (queries msg telegramAPIKey) (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
+  manager <- newManager tlsManagerSettings
+  res <- runClientM (queries msg telegramAPIKey) (ClientEnv manager (BaseUrl Https "api.telegram.org" 443  ""))
   case res of
     Left err -> putStrLn $ "Error: " ++ show err
     Right (resp) -> do
@@ -196,7 +197,7 @@ instance ToJSON SendMessage where
 
 
 data SentMessage = SentMessage {
-    _random_id:: Integer
+    _ok:: Bool
   } deriving (Generic, Show)
 
 instance FromJSON SentMessage where

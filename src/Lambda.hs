@@ -12,6 +12,7 @@ module Lambda(
       , beta'''
       , looksLikeValueDef
       , traceOrFail'''
+      , basicVals
 
 
 ) where
@@ -529,3 +530,59 @@ runTestS s = do
 
 
 --  "(λn.λf.λx.f (n f x)) (λf.λx.f (f x))"
+
+basicVals :: HashMap String Expr
+basicVals = HM.fromList [
+  ("Zero" , parseOrFail "λf.λx.x"),
+  ("One" , parseOrFail "λf.λx.f x"),
+  ("Two" , parseOrFail "λf.λx.f (f x)"),
+
+  ("Succ" , parseOrFail "λn.λf.λx.f (n f x)"),
+  ("Plus" , parseOrFail "λa.λb.a Succ b"),
+  ("Mult" , parseOrFail "λa.λb.a (b Succ) Zero"),
+
+  ("Pair" , parseOrFail "λa.λb.λf.f a b"),
+  ("Fst" , parseOrFail "λc.c (λa.λb.a)"),
+  ("Snd" , parseOrFail "λc.c (λa.λb.b)"),
+
+  ("Zeroes" , parseOrFail "Pair Zero Zero"),
+  ("Foo" , parseOrFail "λp.Pair (Snd p) (Succ (Snd p))"),
+  ("OnePred" , parseOrFail "λn.Fst (n Foo Zeroes)"),
+
+  ("Pz" , parseOrFail "λx.Zero"),
+  ("Pf" , parseOrFail "λg.λh.h (g Succ)"),
+  ("Id" , parseOrFail "λx.x"),
+  ("ANotherPred" , parseOrFail "λn.n Pf Pz Id"),
+
+  ("Pred" , parseOrFail "λn.λf.λx.n (λg.λh.h (g f)) (λk.x) Id"),
+
+  ("Minus" , parseOrFail "λa.λb.b Pred a"),
+
+  ("True" , parseOrFail "λx.λy.x"),
+  ("False" , parseOrFail "λx.λy.y"),
+  ("If" , parseOrFail "λp.λc.λa.p c a"),
+  ("And" , parseOrFail "λa.λb.If a b False"),
+  ("Not" , parseOrFail "λp.λa.λb.p b a"),
+
+  ("IsZero" , parseOrFail "λn.n (λk.False) True"),
+  ("LessOrEq" , parseOrFail "λa.λb.(IsZero (Minus a b))"),
+  ("Eq" , parseOrFail "λa.λb.And (LessOrEq a b) (LessOrEq b a)"),
+
+  ("Nil" , parseOrFail "λc.λn.n"),
+  ("IsNil" , parseOrFail "λl.l (λ_.λ_.False) True"),
+  ("Cons" , parseOrFail "λh.λt.λc.λn.c h (t c n)"),
+  ("Head" , parseOrFail "λl.l (λh.λt.h) False"),
+  ("Append" , parseOrFail "λa.λb.a Cons b"),
+
+  ("Nils" , parseOrFail "(Cons Nil Nil)"),
+  ("Bar" , parseOrFail "λh.λp.Pair (Snd p) (Cons h (Snd p))"),
+  ("Tail" , parseOrFail "λl.Fst (l Bar Nils)"),
+
+  ("Ycomb" , parseOrFail "(λf.(λx.f (x x)) (λx.f (x x)))"),
+  ("Fib'" , parseOrFail "λf.λn.If (LessOrEq n One) n (Plus (f (Pred n)) (f (Pred (Pred n))))"),
+  ("Fib" , parseOrFail "Ycomb Fib"),
+
+  ("EvenoddMult" , parseOrFail "λf.Pair (λn.If (IsZero n) True ((Snd f) (Pred n))) (λn.If (IsZero n) False ((Fst f) (Pred n)))"),
+  ("Evenodd" , parseOrFail "Ycomb EvenoddMult"),
+  ("IsEven" , parseOrFail "Fst Evenodd"),
+  ("IsOdd" , parseOrFail "Snd Evenodd")]
