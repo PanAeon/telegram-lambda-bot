@@ -28,7 +28,7 @@ import           System.Environment
 -- * api
 
 type ItemApi =
-  "new-message" :> ReqBody '[JSON] TelegramMessage  :>  Post '[PlainText] String :<|>
+  "new-message" :> ReqBody '[JSON] TelegramUpdate  :>  Post '[PlainText] String :<|>
   "item" :> Get '[JSON] [Item] :<|>
   "item" :> Capture "itemId" Integer :> Get '[JSON] Item
 
@@ -42,10 +42,20 @@ itemApi = Proxy
 -- TODO: storage limit?
 data ChatSettings = ChatSettings
 data ChatSession = ChatSession (HashMap String Expr) ChatSettings
-type SessionStorage = HashMap String ChatSession
+type SessionStorage = HashMap Int ChatSession
 
 sessionStorage :: TVar SessionStorage
 sessionStorage = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO HM.empty
+
+telegramAPIKey :: String
+telegramAPIKey =  unsafePerformIO $
+                   do
+                   maybePort <- lookupEnv "PORT"
+                   maybe
+                     (putStrLn "TelegramAPIKey not found! using stub!" >> return "<apikey>")
+                     (return)
+                     maybePort
+
 
 run :: IO ()
 run = do
@@ -71,8 +81,8 @@ getVals chatId ss = hm
   where
     (ChatSession hm _) = HM.lookupDefault (ChatSession HM.empty ChatSettings) chatId ss
 
-newMessage :: TelegramMessage -> Handler String
-newMessage msg@(TelegramMessage (TelegramChat chatId) msgText) =
+newMessage :: TelegramUpdate -> Handler String
+newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just msgText)))) =
      do
      if looksLikeValueDef msgText then
        case regularParse valDef msgText of
@@ -88,7 +98,7 @@ newMessage msg@(TelegramMessage (TelegramChat chatId) msgText) =
        vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
        liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
      return ""
-
+newMessage _ = return "ok"
 
 
 
@@ -132,7 +142,7 @@ queries msg token = sendMessage msg ("bot" ++ token)
 doSendMsg :: SendMessage -> IO ()
 doSendMsg  msg = do
   manager <- newManager defaultManagerSettings
-  res <- runClientM (queries msg "412409218:AAENUs0Or0BPQUSgAuzP9hvVm5O5oKpeH9g") (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
+  res <- runClientM (queries msg telegramAPIKey) (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
   case res of
     Left err -> putStrLn $ "Error: " ++ show err
     Right (resp) -> do
@@ -142,7 +152,7 @@ doSendMsg  msg = do
 
 
 data TelegramChat = TelegramChat {
-    _id:: String
+    _id:: Int
   } deriving Generic
 
 
@@ -150,9 +160,19 @@ instance FromJSON TelegramChat where
   parseJSON = genericParseJSON defaultOptions {
                fieldLabelModifier = drop 1 }
 
-data TelegramMessage = TelegramMessage
-  { _chat :: TelegramChat
-  , _text :: String
+
+data TelegramUpdate = TelegramUpdate {
+  _message :: Maybe TelegramMessage
+} deriving Generic
+
+instance FromJSON TelegramUpdate where
+  parseJSON = genericParseJSON defaultOptions {
+               fieldLabelModifier = drop 1 }
+
+data TelegramMessage = TelegramMessage -- actually  update
+  { _chat :: TelegramChat,
+    _text :: Maybe String
+
   } deriving Generic
 
 instance FromJSON TelegramMessage where
@@ -161,7 +181,7 @@ instance FromJSON TelegramMessage where
 
 data SendMessage = SendMessage
   {
-    sm_chat_id :: String,
+    sm_chat_id :: Int,
     sm_text    :: String
   } deriving Generic
 
