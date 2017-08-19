@@ -15,7 +15,9 @@ library
       src
   ghc-options: -Wall
   build-depends:
-      base
+      wai-logger
+    , wai-extra
+    , base
     , servant
     , servant-server
     , http-client
@@ -48,7 +50,9 @@ executable lambda-bot
   main-is: app/Main.hs
   ghc-options: -Wall
   build-depends:
-      base
+      wai-logger
+    , wai-extra
+    , base
     , servant
     , servant-server
     , http-client
@@ -78,7 +82,9 @@ executable lambda-repl
   main-is: repl/Main.hs
   ghc-options: -Wall
   build-depends:
-      base
+      wai-logger
+    , wai-extra
+    , base
     , servant
     , servant-server
     , http-client
@@ -111,7 +117,9 @@ test-suite spec
       test
   ghc-options: -Wall
   build-depends:
-      base
+      wai-logger
+    , wai-extra
+    , base
     , servant
     , servant-server
     , http-client

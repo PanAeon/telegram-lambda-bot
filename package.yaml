@@ -31,6 +31,8 @@ executables:
       - lambda-bot
 
 dependencies:
+  - wai-logger
+  - wai-extra
   - base
   - servant
   - servant-server

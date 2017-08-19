@@ -12,6 +12,7 @@ import           Data.Aeson.Types(fieldLabelModifier)
 import           GHC.Generics
 import           Network.Wai
 import           Network.Wai.Handler.Warp
+import           Network.Wai.Logger       (withStdoutLogger)
 import           Network.HTTP.Client (newManager, defaultManagerSettings)
 import           Servant
 import           Servant.Client
@@ -25,6 +26,7 @@ import qualified Data.HashMap.Lazy as HM
 import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, modifyTVar, readTVarIO)
 import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 import           System.Environment
+import           Network.Wai.Middleware.RequestLogger
 -- * api
 
 type ItemApi =
@@ -59,16 +61,17 @@ telegramAPIKey =  unsafePerformIO $
 
 run :: IO ()
 run = do
-  port <-  fmap ( read  . (maybe "3000" id)) $ lookupEnv "PORT" :: IO Int
-  let
-      settings =
-        setPort port $
-        setBeforeMainLoop (hPutStrLn stderr ("listening on port " ++ show port)) $
-        defaultSettings
-  runSettings settings =<< mkApp
+  withStdoutLogger $ \aplogger -> do
+      port <-  fmap ( read  . (maybe "3000" id)) $ lookupEnv "PORT" :: IO Int
+      let
+          settings =
+            setPort port $
+            setBeforeMainLoop (hPutStrLn stderr ("listening on port " ++ show port)) $
+            setLogger aplogger defaultSettings
+      runSettings settings =<< mkApp
 
 mkApp :: IO Application
-mkApp = return $ serve itemApi server
+mkApp = return  $ logStdoutDev $ serve itemApi server
 
 server :: Server ItemApi
 server =
