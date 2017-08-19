@@ -24,6 +24,7 @@ import           Data.HashMap.Lazy(HashMap)
 import qualified Data.HashMap.Lazy as HM
 import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, modifyTVar, readTVarIO)
 import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
+import           System.Environment
 -- * api
 
 type ItemApi =
@@ -48,7 +49,8 @@ sessionStorage = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO HM.empty
 
 run :: IO ()
 run = do
-  let port = 3000
+  port <-  fmap ( read  . (maybe "3000" id)) $ lookupEnv "PORT" :: IO Int
+  let
       settings =
         setPort port $
         setBeforeMainLoop (hPutStrLn stderr ("listening on port " ++ show port)) $
@@ -130,7 +132,7 @@ queries msg token = sendMessage msg ("bot" ++ token)
 doSendMsg :: SendMessage -> IO ()
 doSendMsg  msg = do
   manager <- newManager defaultManagerSettings
-  res <- runClientM (queries msg "") (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
+  res <- runClientM (queries msg "412409218:AAENUs0Or0BPQUSgAuzP9hvVm5O5oKpeH9g") (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
   case res of
     Left err -> putStrLn $ "Error: " ++ show err
     Right (resp) -> do
