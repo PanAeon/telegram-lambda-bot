@@ -74,6 +74,36 @@ executable lambda-bot
     , lambda-bot
   default-language: Haskell2010
 
+executable lambda-repl
+  main-is: repl/Main.hs
+  ghc-options: -Wall
+  build-depends:
+      base
+    , servant
+    , servant-server
+    , http-client
+    , servant-client
+    , transformers
+    , mtl
+    , stm
+    , aeson
+    , wai
+    , warp
+    , containers
+    , unordered-containers
+    , monad-loops
+    , optparse-applicative
+    , bytestring
+    , MissingH
+    , either
+    , text
+    , vector
+    , parsers
+    , parsec
+    , trifecta
+    , lambda-bot
+  default-language: Haskell2010
+
 test-suite spec
   type: exitcode-stdio-1.0
   main-is: Spec.hs

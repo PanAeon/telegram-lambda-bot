@@ -10,6 +10,8 @@ module Lambda(
       , valP
       , valDef
       , beta'''
+      , looksLikeValueDef
+      , traceOrFail'''
 
 
 ) where
@@ -55,6 +57,10 @@ regularParse p = parse p ""
 parseExpression :: String -> Either ParseError Expr
 parseExpression  = regularParse expr''
 
+
+looksLikeValueDef :: String -> Bool
+looksLikeValueDef s = either (const False) (const True) (regularParse (valP <* ws <* char '=' <* ws) s)
+
 expr'' :: Parser Expr
 expr'' = expr' <* ws <* eof
 
@@ -97,7 +103,7 @@ expr =
 valP :: Parser Expr
 valP = fmap Val $ (:) <$> oneOf ['A'..'Z'] <*> many (oneOf $ '_':'\'':['A'..'Z']++['a'..'z']++['0'..'9'] ) -- FIXME: efficiency
 
----- ATTENTION conflict in the beginning of line "A" - val definition or denomination?
+
 valDef :: Parser (String, Expr)
 valDef = (,) <$> ((fmap getValName valP) <* ws <* char '=' <* ws) <*> expr''
 
@@ -353,7 +359,7 @@ substc''' hm ctxt l@(Lambda v e1) e2 =
 
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
-cbn''' hm ctxt (Val v) = traceShowId $ maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
+cbn''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (cbn''' hm ctxt) (HM.lookup v hm)
 cbn''' hm ctxt v@(Var _) = return v
 cbn''' hm ctxt l@(Lambda _ _) = return l
 cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
@@ -372,6 +378,18 @@ beta''' hm ctxt (App e1 e2) =  (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                                _              -> App <$> (beta''' hm (ctxt . app1C e2) e1') <*> (beta''' hm (ctxt . app2C e1') e2)
 beta''' hm ctxt (Lambda v e) = fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
 beta''' hm ctxt v@(Var _) = return v
+
+
+traceOrFail''' :: HashMap String Expr -> String -> String
+traceOrFail''' hm s = either (\err -> "Сорян, хуйня какя-то. " ++ show err) id myres
+  where
+    maybeExpr = parseExpression s
+    myres     = fmap eval maybeExpr
+    eval ex   = case resOrFail of
+                 Left (VariableNotFoundException v) ->  "no such var " ++ v
+                 Right (r) -> (concat $ fmap (\x ->  "==> " ++ x ++ "\n") xs) ++ ("==> " ++ pprint r ++ "\n")
+      where
+        (resOrFail, xs) = Writer.runWriter $ runExceptT (beta''' hm id ex)
 
 
 runTestA = do

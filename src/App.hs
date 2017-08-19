@@ -16,13 +16,13 @@ import           Network.HTTP.Client (newManager, defaultManagerSettings)
 import           Servant
 import           Servant.Client
 import           System.IO
-import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr)
+import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr, looksLikeValueDef, regularParse, valDef, traceOrFail''')
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Debug.Trace(trace, traceShow, traceShowId)
 import           Data.HashMap.Lazy(HashMap)
 import qualified Data.HashMap.Lazy as HM
-import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, modifyTVar)
+import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, modifyTVar, readTVarIO)
 import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 -- * api
 
@@ -64,15 +64,30 @@ server =
   getItems :<|>
   getItemById
 
+
+getVals chatId ss = hm
+  where
+    (ChatSession hm _) = HM.lookupDefault (ChatSession HM.empty ChatSettings) chatId ss
+
 newMessage :: TelegramMessage -> Handler String
-newMessage msg = do
-                 session <- liftIO $ atomically $ modifyTVar sessionStorage id
-                 liftIO $ doSendMsg (SendMessage chatId errOrRes)
-                 return ""
-        where
-          chatId   = _id . _chat $ msg
-          msgText = _text msg
-          errOrRes = traceOrFail msgText
+newMessage msg@(TelegramMessage (TelegramChat chatId) msgText) =
+     do
+     if looksLikeValueDef msgText then
+       case regularParse valDef msgText of
+         Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
+         Right (name, e) -> liftIO $ atomically $  modifyTVar sessionStorage (\storage ->
+                                let
+                                  update _ (ChatSession hm s)  = ChatSession (HM.insert name e hm) s
+                                in HM.insertWith update chatId (ChatSession (HM.singleton name e) ChatSettings) storage
+
+                            )
+     else
+       do
+       vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
+       liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
+     return ""
+
+
 
 
 getItems :: Handler [Item]
@@ -115,7 +130,7 @@ queries msg token = sendMessage msg ("bot" ++ token)
 doSendMsg :: SendMessage -> IO ()
 doSendMsg  msg = do
   manager <- newManager defaultManagerSettings
-  res <- runClientM (queries msg "<token>") (ClientEnv manager (BaseUrl Http "localhost" 8081 ""))
+  res <- runClientM (queries msg "") (ClientEnv manager (BaseUrl Https "api.telegram.org" 443 ""))
   case res of
     Left err -> putStrLn $ "Error: " ++ show err
     Right (resp) -> do

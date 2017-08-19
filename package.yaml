@@ -25,6 +25,10 @@ executables:
     main: app/Main.hs
     dependencies:
       - lambda-bot
+  lambda-repl:
+    main: repl/Main.hs
+    dependencies:
+      - lambda-bot
 
 dependencies:
   - base
