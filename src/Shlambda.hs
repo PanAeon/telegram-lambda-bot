@@ -227,7 +227,7 @@ substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationEr
 substc''' hm ctxt l@(Lambda v e1) e2 =
     do
       numSubstitutions          <- lift $ get
-      if numSubstitutions > 6000
+      if numSubstitutions > 2000
       then do
            throwE $ ComputationExceedsLimitException $ ctxt $ App l e2
       else do
