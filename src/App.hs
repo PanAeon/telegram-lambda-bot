@@ -95,7 +95,26 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
      do
      if L.isPrefixOf "/" msgText then
        case msgText of
-         _ | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
+         _ | L.isPrefixOf "/run" msgText -> if looksLikeValueDef msgText then
+                                               case regularParse valDef msgText of
+                                                 Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
+                                                 Right (name, e) -> do
+                                                                      vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
+                                                                      case  isRecursive vs name e of
+                                                                        Left err -> liftIO $ doSendMsg (SendMessage chatId $   err)
+                                                                        Right r  -> if r
+                                                                                    then liftIO $ doSendMsg (SendMessage chatId $   "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e)
+                                                                                    else  liftIO $ atomically $  modifyTVar sessionStorage (\storage -> -- could have just used write tvalue..
+                                                                                            let
+                                                                                              update _ (ChatSession hm s)  = ChatSession (HM.insert name e vs) s
+                                                                                            in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
+                                                                                          )
+                                            else
+                                               do
+                                               vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
+                                               liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
+
+           | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                                 "λx.x\n" ++
                                                                 "\\x.x\n" ++
                                                                 "a b\n" ++
@@ -105,9 +124,10 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
                                                               )
            | L.isPrefixOf "/help" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                          "\n" ++
-                                                         "/help         -  show this useles info\n" ++
-                                                         "/help syntax  -  print syntax help\n" ++
-                                                         "/show vals    -  print all defined vals\n"
+                                                         "/help              -  show this useles info\n" ++
+                                                         "/help syntax       -  print syntax help\n" ++
+                                                         "/show vals         -  print all defined vals\n" ++
+                                                         "/run <expr or def> - runs expr\n"
                                                        )
            | L.isPrefixOf "/show vals" msgText -> do
                                                     vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
