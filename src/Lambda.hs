@@ -102,7 +102,7 @@ expr =
 -}
 
 valP :: Parser Expr
-valP = fmap Val $ (:) <$> oneOf ['A'..'Z'] <*> many (oneOf $ '_':'\'':['A'..'Z']++['a'..'z']++['0'..'9'] ) -- FIXME: efficiency
+valP = fmap Val $ (:) <$> oneOf ('\'':['A'..'Z']) <*> many (oneOf $ '_':'\'':['A'..'Z']++['a'..'z']++['0'..'9']++['+','-','=', '/', '*', '<', '>'] ) -- FIXME: efficiency
 
 
 valDef :: Parser (String, Expr)
@@ -118,7 +118,7 @@ app :: Parser Expr
 app =  App <$> (expr' <* ws') <*> (expr')
 
 lambda :: Parser Expr
-lambda =  Lambda <$> (  lambdaLit *> ws *> (oneOf ['a'..'z']) <* ws <* char '.' <* ws) <*> (expr' <* ws )
+lambda =  Lambda <$> (  lambdaLit *> ws *> (oneOf ('_':['a'..'z'])) <* ws <* char '.' <* ws) <*> (expr' <* ws )
 
 lambdaLit :: Parser Char
 lambdaLit = oneOf ['\\', 'λ', '+']
@@ -370,7 +370,6 @@ cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
 
 
 -- FIXME: user bloody reader, merge contexts
--- FIXME: substc ctxt l e2 <-- Vals in expressions!
 beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (Writer [String]) Expr
 beta''' hm ctxt (Val v) = maybe (throwE $ VariableNotFoundException v) (beta''' hm ctxt) (HM.lookup v hm)
 beta''' hm ctxt (App e1 e2) =  (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
@@ -382,15 +381,27 @@ beta''' hm ctxt v@(Var _) = return v
 
 
 traceOrFail''' :: HashMap String Expr -> String -> String
-traceOrFail''' hm s = either (\err -> "Сорян, хуйня какя-то. " ++ show err) id myres
+traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id myres
   where
     maybeExpr = parseExpression s
     myres     = fmap eval maybeExpr
     eval ex   = case resOrFail of
                  Left (VariableNotFoundException v) ->  "no such var " ++ v
-                 Right (r) -> (concat $ fmap (\x ->  "==> " ++ x ++ "\n") xs) ++ ("==> " ++ pprint r ++ "\n")
+                 Right (r) -> printTrace r xs
       where
         (resOrFail, xs) = Writer.runWriter $ runExceptT (beta''' hm id ex)
+        printT     xs   = concat $ fmap (\x ->  "==> " ++ x ++ "\n") xs
+        printTrace r xs = if length xs < 25
+                          then
+                             printT xs ++ ("==> " ++ pprint r ++ "\n")
+                          else
+                             let
+                               header = take 5 xs
+                               footer = drop (length xs - 5) xs
+                               middle = "==> ... skipped " ++ (show $ length xs - 10) ++ " lines ...\n"
+                             in
+                               printT header ++ middle ++ (printT footer) ++  ("==> " ++ pprint r ++ "\n")
+
 
 
 runTestA = do

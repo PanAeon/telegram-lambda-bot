@@ -55,7 +55,7 @@ telegramAPIKey =  unsafePerformIO $ unsafeInterleaveIO $
                    do
                    maybeKey <- lookupEnv "TelegramAPIKey"
                    maybe
-                     (putStrLn "TelegramAPIKey not found! using stub!" >> return "412409218:AAENUs0Or0BPQUSgAuzP9hvVm5O5oKpeH9g")
+                     (putStrLn "TelegramAPIKey not found! using stub!" >> return "<stub>")
                      (\key -> putStrLn ("Key" ++ key) >>  return key)
                      maybeKey
 
