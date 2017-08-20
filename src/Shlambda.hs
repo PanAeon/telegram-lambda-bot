@@ -227,7 +227,7 @@ substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationEr
 substc''' hm ctxt l@(Lambda v e1) e2 =
     do
       numSubstitutions          <- lift $ get
-      if numSubstitutions > 100000
+      if numSubstitutions > 6000
       then do
            throwE $ ComputationExceedsLimitException $ ctxt $ App l e2
       else do
@@ -244,14 +244,7 @@ substc''' hm ctxt l@(Lambda v e1) e2 =
 
 
 lookupVar :: String -> Ctxt -> HashMap String Expr -> (Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) a) -> ExceptT EvaluationError (StateT Int (Writer [String])) a
-lookupVar v ctxt hm f = do
-                   numSubstitutions          <- lift $ get
-                   if numSubstitutions > 100000
-                   then do
-                        throwE $ ComputationExceedsLimitException $ ctxt $ Val v
-                   else do
-                        lift $ put (numSubstitutions + 1)
-                        maybe (throwE $ VariableNotFoundException v) (f) (HM.lookup v hm)
+lookupVar v ctxt hm f = maybe (throwE $ VariableNotFoundException v) (f) (HM.lookup v hm)
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
 cbn''' hm ctxt (Val v) = lookupVar v ctxt hm (cbn''' hm ctxt)
