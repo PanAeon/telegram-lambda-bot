@@ -13,7 +13,7 @@ cabal-version:  >= 1.10
 library
   hs-source-dirs:
       src
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
   build-depends:
       http-client-tls
     , wai-logger
@@ -45,11 +45,12 @@ library
       App
       GentleMonadTransformers
       Lambda
+      Shlambda
   default-language: Haskell2010
 
 executable lambda-bot
   main-is: app/Main.hs
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
   build-depends:
       http-client-tls
     , wai-logger
@@ -82,7 +83,7 @@ executable lambda-bot
 
 executable lambda-repl
   main-is: repl/Main.hs
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
   build-depends:
       http-client-tls
     , wai-logger
@@ -118,7 +119,7 @@ test-suite spec
   main-is: Spec.hs
   hs-source-dirs:
       test
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
   build-depends:
       http-client-tls
     , wai-logger

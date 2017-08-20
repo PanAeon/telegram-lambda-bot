@@ -506,10 +506,10 @@ throw = Left
 --                                  tell $ [pprint $ ctxt $ App l e2]
 --                                  return $ subst v e2 e1
 
+-- FIXME: needz state for a limited number of steps reduction
 
-
-substd :: Ctxt -> Expr -> Expr -> Exception Expr Expr
-substd ctxt l@(Lambda v e1) e2 = if  needsAlpha e2 l then
+substd :: Int -> Ctxt -> Expr -> Expr -> Exception Expr Expr
+substd n ctxt l@(Lambda v e1) e2 = if  needsAlpha e2 l then
                               let (v', e1') = fixFreeVars e2 l
                               in do
                                 --  tell $ [pprint $ ctxt $ App l e2]
@@ -518,26 +518,26 @@ substd ctxt l@(Lambda v e1) e2 = if  needsAlpha e2 l then
                                 --  tell $ [pprint $ ctxt $ App l e2]
                                  throw $ ctxt $ subst v e2 e1
 
-cbn'' :: Ctxt -> Expr -> Exception Expr Expr
-cbn'' ctxt v@(Var _) = return v
-cbn'' ctxt l@(Lambda _ _) = return l
-cbn'' ctxt (App e1 e2) = (cbn'' (ctxt . app1C e2) e1) >>= \e1' ->
+cbn'' :: Int -> Ctxt -> Expr -> Exception Expr Expr
+cbn'' n ctxt v@(Var _) = return v
+cbn'' n ctxt l@(Lambda _ _) = return l
+cbn'' n ctxt (App e1 e2) = (cbn'' n (ctxt . app1C e2) e1) >>= \e1' ->
                           case e1' of
-                            l@(Lambda x e) -> substd ctxt l e2 >>= (cbn'' ctxt)
+                            l@(Lambda x e) -> substd n ctxt l e2 >>= (cbn'' (n+1) ctxt)
                             _          -> return $ App e1' e2
 
-beta'' :: Ctxt -> Expr -> Exception Expr Expr
-beta'' ctxt (App e1 e2) =  (cbn'' (ctxt . app1C e2) e1) >>= \e1' ->
+beta'' :: Int -> Ctxt -> Expr -> Exception Expr Expr
+beta'' n ctxt (App e1 e2) =  (cbn'' n (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
-                               l@(Lambda x e) -> (beta'' (ctxt))  =<< substd ctxt l e2
-                               _              -> App <$> (beta'' (ctxt . app1C e2) e1') <*> (beta'' (ctxt . app2C e1') e2)
-beta'' ctxt (Lambda v e) = fmap (Lambda v) $ beta'' (ctxt . lambdaC v) e
-beta'' ctxt v@(Var _) = return v
+                               l@(Lambda x e) -> substd n ctxt l e2 >>= (beta'' (n+1) (ctxt))
+                               _              -> App <$> (beta'' n (ctxt . app1C e2) e1') <*> (beta'' n (ctxt . app2C e1') e2)
+beta'' n ctxt (Lambda v e) = fmap (Lambda v) $ beta'' n (ctxt . lambdaC v) e
+beta'' n ctxt v@(Var _) = return v
 
 runTestS s = do
            putStrLn $ "==> " ++ pprint res
   where
-     res = either id id $ beta'' id $ parseOrFail s
+     res = either id id $ beta'' 0 id $ parseOrFail s
 
 
 --  "(λn.λf.λx.f (n f x)) (λf.λx.f (f x))"

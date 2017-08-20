@@ -6,6 +6,7 @@
 
 module App where
 
+-- FIXME: replace all String with TEXT !!!
 --import           Control.Monad.Trans.Except
 import           Data.Aeson
 import           Data.Aeson.Types(fieldLabelModifier)
@@ -18,7 +19,9 @@ import           Network.HTTP.Client.TLS( tlsManagerSettings)
 import           Servant
 import           Servant.Client
 import           System.IO
-import           Lambda(beta'', beta''', parseExpression, traceOrFail, Expr, looksLikeValueDef, regularParse, valDef, traceOrFail''', basicVals)
+import           Shlambda( beta''', parseExpression, Expr,
+                         looksLikeValueDef, regularParse, valDef, traceOrFail''', basicVals,
+                         pprint, isRecursive)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Debug.Trace(trace, traceShow, traceShowId)
@@ -28,6 +31,7 @@ import           Control.Concurrent.STM(TVar, newTVarIO, newTVar, atomically, mo
 import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 import           System.Environment
 import           Network.Wai.Middleware.RequestLogger
+import qualified Data.List as L
 -- * api
 
 type ItemApi =
@@ -67,6 +71,7 @@ run = do
       let
           settings =
             setPort port $
+            setTimeout 60 $
             setBeforeMainLoop (hPutStrLn stderr ("listening on port " ++ show port)) $
             setLogger aplogger defaultSettings
       runSettings settings =<< mkApp
@@ -88,15 +93,44 @@ getVals chatId ss = hm
 newMessage :: TelegramUpdate -> Handler String
 newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just msgText)))) =
      do
-     if looksLikeValueDef msgText then
+     if L.isPrefixOf "/" msgText then
+       case msgText of
+         _ | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
+                                                                "λx.x\n" ++
+                                                                "\\x.x\n" ++
+                                                                "a b\n" ++
+                                                                "(a b)\n" ++
+                                                                "X = <expr>\n" ++
+                                                                "'0 = λf.λx.x"
+                                                              )
+           | L.isPrefixOf "/help" msgText -> liftIO $ doSendMsg (SendMessage chatId $
+                                                         "\n" ++
+                                                         "/help         -  show this useles info\n" ++
+                                                         "/help syntax  -  print syntax help\n" ++
+                                                         "/show vals    -  print all defined vals\n"
+                                                       )
+           | L.isPrefixOf "/show vals" msgText -> do
+                                                    vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
+                                                    let
+                                                      f k v r = k ++ "  -  " ++ (pprint v) ++ "\n" ++ r
+                                                      res = HM.foldrWithKey f "" vals
+                                                    liftIO $ doSendMsg (SendMessage chatId res )
+           | otherwise                    -> liftIO $ doSendMsg (SendMessage chatId "unknown command")
+     else if looksLikeValueDef msgText then
        case regularParse valDef msgText of
          Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
-         Right (name, e) -> liftIO $ atomically $  modifyTVar sessionStorage (\storage ->
-                                let
-                                  update _ (ChatSession hm s)  = ChatSession (HM.insert name e hm) s
-                                in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
+         Right (name, e) -> do
+                              vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
+                              case  isRecursive vs name e of
+                                Left err -> liftIO $ doSendMsg (SendMessage chatId $   err)
+                                Right r  -> if r
+                                            then liftIO $ doSendMsg (SendMessage chatId $   "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e)
+                                            else  liftIO $ atomically $  modifyTVar sessionStorage (\storage -> -- could have just used write tvalue..
+                                                    let
+                                                      update _ (ChatSession hm s)  = ChatSession (HM.insert name e vs) s
+                                                    in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
+                                                  )
 
-                            )
      else
        do
        vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
@@ -185,8 +219,9 @@ instance FromJSON TelegramMessage where
 
 data SendMessage = SendMessage
   {
-    sm_chat_id :: Int,
-    sm_text    :: String
+      sm_chat_id :: Int
+    , sm_text    :: String
+    --,sm_parse_mode :: Maybe String FIXME: support Markdown
   } deriving Generic
 
 instance ToJSON SendMessage where

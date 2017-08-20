@@ -1,6 +1,6 @@
 module Main where
 
-import           Lambda
+import           Shlambda
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Debug.Trace(trace, traceShow, traceShowId)
@@ -18,7 +18,7 @@ import           GHC.IO.Encoding
 type Variables = HashMap String Expr
 
 variables :: TVar Variables
-variables = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO HM.empty
+variables = unsafePerformIO $ unsafeInterleaveIO $ newTVarIO basicVals
 
 
 repl :: IO ()
@@ -30,9 +30,16 @@ repl = void $ iterateUntil id $ do
                   if looksLikeValueDef str then
                     case regularParse valDef str of
                       Left err -> putStrLn $ "could not parse value definition: " ++  show err
-                      Right (name, e) -> liftIO $ atomically $  modifyTVar variables (\vals ->
-                                             HM.insert name e vals
-                                         )
+                      Right (name, e) -> do
+                                          vs <- readTVarIO variables
+                                          case  isRecursive vs name e of
+                                            Left err -> putStrLn err
+                                            Right r  -> if r
+                                                        then putStrLn $ "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e
+                                                        else  liftIO $ atomically $  modifyTVar variables (\vals ->
+                                                                 HM.insert name e vals
+                                                              )
+
                   else
                     do
                     vals <- readTVarIO variables
