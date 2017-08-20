@@ -14,6 +14,28 @@ module Shlambda(
 
 ) where
 
+
+-- FIXME: check message size for telegram
+
+-- Buildpack :: https://github.com/mfine/heroku-buildpack-stack
+
+-- https://core.telegram.org/bots/api#sendmessage
+
+
+-- TODO: ghci debugger
+-- http://projects.haskell.org/hat/
+-- https://wiki.haskell.org/Hoed
+-- GHC.Stack
+-- https://simonmar.github.io/posts/2016-02-12-Stack-traces-in-GHCi.html
+-- https://github.com/commercialhaskell/stack/issues/2358
+-- https://ocharles.org.uk/blog/posts/2016-01-26-transformers-free-monads-mtl-laws.html
+
+-- TODO: checkout http://hackage.haskell.org/package/haskeline
+-- TODO: see also https://stackoverflow.com/questions/21114222/difference-in-getline-functionality-with-ghci-vs-runhaskell
+
+-- checkout http://hackage.haskell.org/package/LambdaCalculator-0.2/src/LambdaCalculator.hs
+
+
 import Text.Parsec (ParseError)
 import Text.Parsec.Token(lexeme)
 import Text.Parsec.String (Parser)
@@ -270,6 +292,19 @@ beta''' hm ctxt (Lambda v e) =  fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) 
 beta''' _ _ v@(Var _) = return v
 
 
+telegramMaxMessageSize:: Int
+telegramMaxMessageSize = 4096
+
+maxMessageSize:: Int
+maxMessageSize = 3584
+
+maxStackTraceSize:: Int
+maxStackTraceSize = 2048
+
+limitTrace :: String -> String
+limitTrace s = if length s < maxStackTraceSize then s else "..ommitted.. ..too big for telegram.."
+
+
 traceOrFail''' :: HashMap String Expr -> String -> String
 traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id myres
   where
@@ -279,14 +314,22 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
                  Left (VariableNotFoundException v) ->  "no such var " ++ v
                  Left (ComputationExceedsLimitException r) -> ("Computation took to long to complete. sorry..\n" ++
                                                                 "Trace:\n" ++
-                                                                printTrace xs ++
+                                                                limitTrace (printTrace xs) ++
                                                                 "Last result:\n" ++
-                                                                ("==> " ++ pprint r ++ "\n")
+                                                                limitTrace ("==> " ++ pprint r ++ "\n")
                                                                )
-                 Right (r) -> printTrace xs ++ ("==> " ++ pprint r ++ "\n")
+                 Right (r) -> let
+                                r' = printTrace xs ++ ("==> " ++ pprint r ++ "\n")
+                              in case length r' of
+                                  l | l < maxMessageSize -> r'
+                                    | otherwise  -> let r'' = ("==> " ++ pprint r ++ "\n")
+                                                    in if  length r'' < maxMessageSize then r'' else "Wow. I could't even print result. It's too big for telegram."
+
+
       where
         (resOrFail, xs) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 0
         printT     ys   = concat $ fmap (\x ->  "==> " ++ x ++ "\n") ys
+
         printTrace ys = if length ys < 25
                           then
                              printT ys

@@ -86,8 +86,7 @@ server =
   getItemById
 
 
--- TODO: checkout http://hackage.haskell.org/package/haskeline
--- checkout http://hackage.haskell.org/package/LambdaCalculator-0.2/src/LambdaCalculator.hs
+
 -- FIXME: optimize free var lookup
 
 getVals chatId ss = hm
