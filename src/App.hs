@@ -95,8 +95,9 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
      do
      if L.isPrefixOf "/" msgText then
        case msgText of
-         _ | L.isPrefixOf "/run" msgText -> if looksLikeValueDef msgText then
-                                               case regularParse valDef msgText of
+         _ | L.isPrefixOf "/run" msgText -> let msgText' = drop 4 msgText
+                                            in if looksLikeValueDef msgText' then
+                                               case regularParse valDef msgText' of
                                                  Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
                                                  Right (name, e) -> do
                                                                       vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
@@ -112,7 +113,7 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
                                             else
                                                do
                                                vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
-                                               liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
+                                               liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText')
 
            | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                                 "λx.x\n" ++
