@@ -95,7 +95,7 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
      do
      if L.isPrefixOf "/" msgText then
        case msgText of
-         _ | L.isPrefixOf "/run" msgText -> let msgText' = drop 4 msgText
+         _ | L.isPrefixOf "/run" msgText -> let msgText' = drop 5 msgText
                                             in if looksLikeValueDef msgText' then
                                                case regularParse valDef msgText' of
                                                  Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
