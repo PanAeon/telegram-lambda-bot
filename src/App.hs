@@ -24,6 +24,7 @@ import           Shlambda( beta''', parseExpression, Expr,
                          pprint, isRecursive)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
+import           Control.Monad(void)
 import           Debug.Trace(trace, traceShow, traceShowId)
 import           Data.HashMap.Lazy(HashMap)
 import qualified Data.HashMap.Lazy as HM
@@ -32,6 +33,7 @@ import           System.IO.Unsafe(unsafePerformIO, unsafeInterleaveIO)
 import           System.Environment
 import           Network.Wai.Middleware.RequestLogger
 import qualified Data.List as L
+import           Control.Concurrent(forkIO, ThreadId)
 -- * api
 
 type ItemApi =
@@ -140,27 +142,35 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
                                                       res = HM.foldrWithKey f "" vals
                                                     liftIO $ doSendMsg (SendMessage chatId res )
            | otherwise                    -> liftIO $ doSendMsg (SendMessage chatId "unknown command")
-     else if looksLikeValueDef msgText then
-       case regularParse valDef msgText of
-         Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
-         Right (name, e) -> do
-                              vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
-                              case  isRecursive vs name e of
-                                Left err -> liftIO $ doSendMsg (SendMessage chatId $   err)
-                                Right r  -> if r
-                                            then liftIO $ doSendMsg (SendMessage chatId $   "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e)
-                                            else  liftIO $ atomically $  modifyTVar sessionStorage (\storage -> -- could have just used write tvalue..
-                                                    let
-                                                      update _ (ChatSession hm s)  = ChatSession (HM.insert name e vs) s
-                                                    in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
-                                                  )
-
      else
-       do
-       vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
-       liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
+      void $ liftIO $ handleMessage chatId msgText
      return ""
 newMessage _ = return "ok"
+
+
+
+handleMessage :: Int -> String -> IO ThreadId
+handleMessage chatId msgText = forkIO $
+      do
+        if looksLikeValueDef msgText then
+            case regularParse valDef msgText of
+              Left err -> doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
+              Right (name, e) -> do
+                                   vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
+                                   case  isRecursive vs name e of
+                                     Left err -> liftIO $ doSendMsg (SendMessage chatId $   err)
+                                     Right r  -> if r
+                                                 then liftIO $ doSendMsg (SendMessage chatId $   "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e)
+                                                 else  liftIO $ atomically $  modifyTVar sessionStorage (\storage -> -- could have just used write tvalue..
+                                                         let
+                                                           update _ (ChatSession hm s)  = ChatSession (HM.insert name e vs) s
+                                                         in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
+                                                       )
+
+        else
+          do
+          vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
+          doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
 
 
 
