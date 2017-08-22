@@ -29,6 +29,7 @@ executables:
     main: repl/Main.hs
     dependencies:
       - lambda-bot
+      ##- haskeline
 
 dependencies:
   - http-client-tls

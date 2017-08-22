@@ -51,4 +51,6 @@ repl = void $ iterateUntil id $ do
 main :: IO ()
 main = do
        setLocaleEncoding utf8
+       hSetBuffering stdin LineBuffering
+       hSetBuffering stdout LineBuffering
        repl
