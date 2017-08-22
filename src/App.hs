@@ -34,6 +34,7 @@ import           System.Environment
 import           Network.Wai.Middleware.RequestLogger
 import qualified Data.List as L
 import           Control.Concurrent(forkIO, ThreadId)
+import           Data.Ord
 -- * api
 
 type ItemApi =
@@ -100,26 +101,7 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
      do
      if L.isPrefixOf "/" msgText then
        case msgText of
-         _ | L.isPrefixOf "/run" msgText -> let msgText' = drop 5 msgText
-                                            in if looksLikeValueDef msgText' then
-                                               case regularParse valDef msgText' of
-                                                 Left err -> liftIO $ doSendMsg (SendMessage chatId $ "could not parse value definition: " ++  show err)
-                                                 Right (name, e) -> do
-                                                                      vs <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage) -- FIXME: 1!! NOT ATOMIC (I will just rewrite new value )!!!
-                                                                      case  isRecursive vs name e of
-                                                                        Left err -> liftIO $ doSendMsg (SendMessage chatId $   err)
-                                                                        Right r  -> if r
-                                                                                    then liftIO $ doSendMsg (SendMessage chatId $   "Recursive definition: " ++ name ++ " appears in rhs: " ++ pprint e)
-                                                                                    else  liftIO $ atomically $  modifyTVar sessionStorage (\storage -> -- could have just used write tvalue..
-                                                                                            let
-                                                                                              update _ (ChatSession hm s)  = ChatSession (HM.insert name e vs) s
-                                                                                            in HM.insertWith update chatId (ChatSession (HM.insert name e basicVals) ChatSettings) storage
-                                                                                          )
-                                            else
-                                               do
-                                               vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
-                                               liftIO $ doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText')
-
+         _ | L.isPrefixOf "/run" msgText -> void $ liftIO $ handleMessage chatId ( drop 5 msgText)
            | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                                 "λx.x\n" ++
                                                                 "\\x.x\n" ++
@@ -138,8 +120,9 @@ newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just ms
            | L.isPrefixOf "/show vals" msgText -> do
                                                     vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
                                                     let
-                                                      f k v r = k ++ "  -  " ++ (pprint v) ++ "\n" ++ r
-                                                      res = HM.foldrWithKey f "" vals
+                                                      f (k, v) r = k ++ "  -  " ++ (pprint v) ++ "\n" ++ r -- FIXME: difference list
+                                                      foo = L.sortBy (comparing fst) (HM.toList vals)
+                                                      res = foldr f "" foo
                                                     liftIO $ doSendMsg (SendMessage chatId res )
            | otherwise                    -> liftIO $ doSendMsg (SendMessage chatId "unknown command")
      else
