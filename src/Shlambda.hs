@@ -16,6 +16,9 @@ module Shlambda(
 ) where
 
 
+-- FIXME: Ycomb '6 OOM
+-- FIXME: normal vars, like this_isVar and `a` <- this is also var) equalize them)
+-- FIXME: single step
 -- FIXME: check message size for telegram
 
 -- Buildpack :: https://github.com/mfine/heroku-buildpack-stack
