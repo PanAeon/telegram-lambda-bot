@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 module Shlambda(
         Expr(..)
       , parseExpression
@@ -49,9 +50,9 @@ import qualified Data.Vector as V
 import Data.Char(digitToInt)
 import Data.List(delete, union, find)
 import Debug.Trace(trace, traceShow, traceShowId)
-import Control.Monad.Writer(Writer,tell)
+import Control.Monad.Writer.Strict(Writer,tell)
 import Control.Monad.Trans.State.Lazy
-import qualified Control.Monad.Writer as Writer
+import qualified Control.Monad.Writer.Strict as Writer
 --import Control.Applicative
 import Control.Monad.Trans.Class(lift)
 import Control.Monad.Trans.Except
@@ -65,6 +66,30 @@ data Cmd = Help
 
 data Expr = Var Char  | App Expr Expr | Lambda Char Expr | Val String -- | const
             deriving (Show, Eq)
+
+
+logLimit :: Int
+logLimit = 10
+
+data LambdaLog = LambdaLog [String] Int [String] deriving (Show, Eq)
+
+instance Monoid LambdaLog where
+  mempty = LambdaLog [] 0 []
+  (LambdaLog aHead aLength aTail) `mappend` (LambdaLog bHead bLength bTail) =
+      LambdaLog fst5 totalLength lst5
+    where
+      totalLength = aLength + bLength
+      (!fst5, rst5) = splitAt 5 $ aHead ++ (reverse  aTail) ++ bHead ++ (reverse bTail)
+      !lst5 = take 5 $ reverse rst5--bTail ++ (reverse bHead) ++ aTail ++ (reverse aHead)
+
+logS :: String -> LambdaLog
+logS s = LambdaLog [s] 1 []
+
+logSS :: [String] -> LambdaLog
+logSS xs = LambdaLog (take 5 xs) (length xs) (reverse $ drop 5 xs)
+  where
+    l = length xs
+
 
 
 
@@ -190,7 +215,7 @@ isRecursive hm n (App a b) = (||) <$> isRecursive hm n a <*> isRecursive hm n b
 isRecursive hm n (Lambda _ f) = isRecursive hm n f
 
 
-subst''' :: HashMap String Expr -> Char -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
+subst''' :: HashMap String Expr -> Char -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 subst''' hm c e2 (Val v) =  lookupVar v id hm (subst''' hm c e2)
 subst''' hm c e2 v@(Var y) | c == y       = return e2
                            | otherwise    = return v
@@ -212,7 +237,7 @@ subst''' hm c e2 l@(Lambda y f) | c == y = return l
 
 
 
-alpha''':: HashMap String Expr -> Char -> Char -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
+alpha''':: HashMap String Expr -> Char -> Char -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 alpha''' hm x z (Val v) = lookupVar v id hm (alpha''' hm x z)
 alpha''' hm x z (Var y) | x == y    = return $ Var z
                         | otherwise =  return  $ Var y
@@ -221,20 +246,20 @@ alpha''' hm x z (Lambda y f) | x == y = return $ Lambda y f
                              | otherwise = fmap (Lambda y) (alpha''' hm x z f)
 
 
-freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) [Char] -- FIXME: this method is not writer !!!
+freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) [Char] -- FIXME: this method is not writer !!!
 freeV''' hm (Val v) = lookupVar v id hm (freeV''' hm)
 freeV''' _ (Var x) = return [x]
 freeV''' hm (Lambda x t) = fmap (delete x) $ freeV''' hm t
 freeV''' hm (App e1 e2) = (liftM2 union) (freeV''' hm e1) (freeV''' hm e2)
 
 
-needsAlpha''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Bool -- FIXME: this method is not writer !!!
+needsAlpha''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Bool -- FIXME: this method is not writer !!!
 needsAlpha''' hm e2 (Lambda y _) = fmap (elem y) (freeV''' hm e2)
 needsAlpha''' _  _  (Val v)     = error "needsAlpha''' Val is not implemented!!"
 needsAlpha''' _ _ _             = return False
 
 
-fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) (Char, Expr) -- FIXME: this method is not writer !!!
+fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (Char, Expr) -- FIXME: this method is not writer !!!
 fixFreeVars''' hm e2 (Lambda x e1) = do
                                          let symbols = ['a'..'z']
                                          fv      <- freeV''' hm e2
@@ -245,7 +270,7 @@ fixFreeVars''' hm e2 (Lambda x e1) = do
 
 
 
-substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
+substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 substc''' hm ctxt l@(Lambda v e1) e2 =
     do
       numSubstitutions          <- lift $ get
@@ -258,17 +283,17 @@ substc''' hm ctxt l@(Lambda v e1) e2 =
            if (needsAlpha)
            then do
                  (v', e1') <- fixFreeVars''' hm e2 l
-                 lift $ tell $ [pprint $ ctxt $ App l e2]
+                 lift $ tell $ logS $ pprint $ ctxt $ App l e2
                  subst''' hm v' e2 e1'
            else do
-                 lift $ tell $ [pprint $ ctxt $ App l e2]
+                 lift $ tell $ logS $ pprint $ ctxt $ App l e2
                  subst''' hm v e2 e1
 
 
-lookupVar :: String -> Ctxt -> HashMap String Expr -> (Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) a) -> ExceptT EvaluationError (StateT Int (Writer [String])) a
+lookupVar :: String -> Ctxt -> HashMap String Expr -> (Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) a) -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) a
 lookupVar v ctxt hm f = maybe (throwE $ VariableNotFoundException v) (f) (HM.lookup v hm)
 
-cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
+cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 cbn''' hm ctxt (Val v) = lookupVar v ctxt hm (cbn''' hm ctxt)
 cbn''' _ _ v@(Var _) = return v
 cbn''' _ _ l@(Lambda _ _) = return l
@@ -279,7 +304,7 @@ cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
 
 
 -- FIXME: user bloody reader, merge contexts (for context is better to use state?)
-beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer [String])) Expr
+beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 beta''' hm ctxt (Val v) =  lookupVar v ctxt hm (beta''' hm ctxt)
 beta''' hm ctxt (App e1 e2) =   (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
@@ -314,12 +339,12 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
                  Left (VariableNotFoundException v) ->  "no such var " ++ v
                  Left (ComputationExceedsLimitException r) -> ("Computation took to long to complete. sorry..\n" ++
                                                                 "Trace:\n" ++
-                                                                limitTrace (printTrace xs) ++
+                                                                limitTrace(printLambdaLog ll) ++
                                                                 "Last result:\n" ++
                                                                 limitTrace ("==> " ++ pprint r ++ "\n")
                                                                )
                  Right (r) -> let
-                                r' = printTrace xs ++ ("==> " ++ pprint r ++ "\n")
+                                r' = (printLambdaLog ll) ++ ("==> " ++ pprint r ++ "\n")
                               in case length r' of
                                   l | l < maxMessageSize -> r'
                                     | otherwise  -> let r'' = ("==> " ++ pprint r ++ "\n")
@@ -327,8 +352,16 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
 
 
       where
-        (resOrFail, xs) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 0
+        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 0
         printT     ys   = concat $ fmap (\x ->  "==> " ++ x ++ "\n") ys
+
+        printLambdaLog :: LambdaLog -> String
+        printLambdaLog (LambdaLog logH ls logT) =
+          if (ls < 10)
+          then printT (logH  ++ reverse logT)
+          else printT logH ++ ( "==> ... skipped " ++ (show $ ls - 10) ++ " lines ...\n" ) ++ printT (reverse logT)
+
+
 
         printTrace ys = if length ys < 25
                           then
