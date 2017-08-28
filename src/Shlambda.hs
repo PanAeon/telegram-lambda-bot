@@ -62,6 +62,8 @@ import Control.Monad.Trans.Class(lift)
 import Control.Monad.Trans.Except
 import Data.HashMap.Lazy(HashMap)
 import qualified Data.HashMap.Lazy as HM
+import Data.Set(Set)
+import qualified Data.Set as Set
 
 data Variable = Variable Char
 
@@ -75,7 +77,7 @@ data Expr = Var String  | App Expr Expr | Lambda String Expr  -- | const
 logLimit :: Int
 logLimit = 10
 
-data LambdaLog = LambdaLog [String] Int [String] deriving (Show, Eq)
+data LambdaLog = LambdaLog ![String] !Int ![String] deriving (Show, Eq)
 
 instance Monoid LambdaLog where
   mempty = LambdaLog [] 0 []
@@ -204,15 +206,15 @@ data EvaluationError = VariableNotFoundException String |
 
 
 
-subst''' :: HashMap String Expr -> String -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-subst''' hm c e2 v@(Var y) | c == y       = return e2
+subst''' :: String -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+subst'''  c e2 v@(Var y) | c == y       = return e2
                            | otherwise    = return v
-subst''' hm c e2 (App a b)  = do
-                                e1' <- subst''' hm c e2 a
-                                e2' <- subst''' hm c e2 b
+subst'''  c e2 (App a b)  = do
+                                e1' <- subst'''  c e2 a
+                                e2' <- subst'''  c e2 b
                                 return $ App e1' e2'
-subst''' hm c e2 l@(Lambda y f) | c == y = return l
-                                | otherwise = fmap (Lambda y) (subst''' hm c e2 f)
+subst'''  c e2 l@(Lambda y f) | c == y = return l
+                                | otherwise = fmap (Lambda y) (subst'''  c e2 f)
                                               -- do
                                               -- freeVNotFixed <- fmap (elem c) (freeV''' hm e2)
                                               -- if freeVNotFixed
@@ -225,38 +227,44 @@ subst''' hm c e2 l@(Lambda y f) | c == y = return l
 
 
 
-alpha''':: HashMap String Expr -> String -> String -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-alpha''' hm x z (Var y) | x == y    = return $ Var z
-                        | otherwise =  return  $ Var y
-alpha''' hm x z (App a b) = App <$> (alpha''' hm x z a) <*> (alpha''' hm x z b)
-alpha''' hm x z (Lambda y f) | x == y = return $ Lambda y f
-                             | otherwise = fmap (Lambda y) (alpha''' hm x z f)
+alpha'''::  String -> String -> Expr ->  Expr
+alpha'''  x z (Var y) | x == y    =  Var z
+                        | otherwise =    Var y
+alpha'''  x z (App a b) = App (alpha'''  x z a)  (alpha'''  x z b)
+alpha'''  x z (Lambda y f) | x == y =   Lambda y f
+                             | otherwise =  Lambda y (alpha'''  x z f)
 
 
-freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) [String] -- FIXME: this method is not writer !!!
-freeV''' hm (Var x) = either (return . const [x]) (freeV''' hm) (lookupVar x id hm) -- FIXME: limit execution steps
-freeV''' hm (Lambda x t) = fmap (delete x) $ freeV''' hm t
-freeV''' hm (App e1 e2) = (liftM2 union) (freeV''' hm e1) (freeV''' hm e2)
+freeV''' ::  Expr -> Set String -- FIXME: this method is not writer !!!
+freeV'''  (Var x) =   Set.singleton x
+freeV'''  (Lambda x t) =  (Set.delete x) $ freeV''' t
+freeV'''  (App e1 e2) =  Set.union (freeV'''  e1) (freeV'''  e2)
 
 
-needsAlpha''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Bool -- FIXME: this method is not writer !!!
-needsAlpha''' hm e2 (Lambda y _) = fmap (elem y) (freeV''' hm e2)
-needsAlpha''' _ _ _             = return False
+size''' ::  Expr -> Int
+size'''  (Var x) = 1
+size'''  (Lambda _ t) =1 + size''' t
+size'''  (App e1 e2) = size''' e1 + size''' e2
 
 
-fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (String, Expr) -- FIXME: this method is not writer !!!
-fixFreeVars''' hm e2 (Lambda x e1) = do
+needsAlpha''' ::  Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Bool -- FIXME: this method is not writer !!!
+needsAlpha'''  e2 (Lambda y _) = return $  (elem y) (freeV''' e2)
+needsAlpha'''  _ _             = return False
+
+
+fixFreeVars''' ::  Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (String, Expr) -- FIXME: this method is not writer !!!
+fixFreeVars'''  e2 (Lambda x e1) = do
                                          let symbols = fmap (\i -> x ++ (show i)) [1..]
-                                         fv      <- freeV''' hm e2
+                                         let fv      = freeV'''  e2
                                          let s       = head $ filter (\z -> not $ elem z fv) symbols
-                                         fmap (\y -> (s,y)) (alpha''' hm x s e1)
+                                         return (s, alpha'''  x s e1)
 
 
 
 
 
-substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-substc''' hm ctxt l@(Lambda v e1) e2 =
+substc''' ::  Ctxt -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+substc'''  ctxt l@(Lambda v e1) e2 =
     do
       numSubstitutions          <- lift $ get
       if numSubstitutions <= 0
@@ -264,30 +272,30 @@ substc''' hm ctxt l@(Lambda v e1) e2 =
            throwE $ ComputationExceedsLimitException $ ctxt $ App l e2
       else do
            lift $ put (numSubstitutions - 1)
-           needsAlpha <- needsAlpha''' hm e2 l
+           needsAlpha <- needsAlpha'''  e2 l
            if (needsAlpha)
            then do
-                 (v', e1') <- fixFreeVars''' hm e2 l
+                 (v', e1') <- fixFreeVars'''  e2 l
                  lift $ tell $ logS $ pprint $ ctxt $ App l e2
-                 subst''' hm v' e2 e1'
+                 subst'''  v' e2 e1'
            else do
                  lift $ tell $ logS $ pprint $ ctxt $ App l e2
-                 subst''' hm v e2 e1
+                 subst'''  v e2 e1
 
 
 
 maybeToEither :: a -> Maybe b -> Either a b
 maybeToEither = flip maybe Right . Left
 
-lookupVar :: String -> Ctxt -> HashMap String Expr -> Either Expr Expr
-lookupVar v ctxt hm = maybeToEither (Var v) (HM.lookup v hm)
+lookupVar :: String -> HashMap String Expr -> Either Expr Expr
+lookupVar v  hm = maybeToEither (Var v) (HM.lookup v hm)
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-cbn''' hm ctxt (Var v) = either return (cbn''' hm ctxt) (lookupVar v ctxt hm) -- FIXME: limit execution steps
+cbn''' hm ctxt xpr@(Var v) = either return (checkExecution ctxt xpr . cbn''' hm ctxt) (lookupVar v  hm)
 cbn''' _ _ l@(Lambda _ _) = return l
 cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                           case e1' of
-                            l@(Lambda _ _) ->  (substc''' hm ctxt l e2) >>= (cbn''' hm ctxt)
+                            l@(Lambda _ _) ->  (substc'''  ctxt l e2) >>= (cbn''' hm ctxt)
                             _              -> return $ App e1' e2
 
 
@@ -295,13 +303,26 @@ cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
 beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 beta''' hm ctxt (App e1 e2) =   (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
-                               l@(Lambda _ _) ->  (substc''' hm ctxt l e2) >>= (beta''' hm (ctxt))
+                               l@(Lambda _ _) ->  (substc'''  ctxt l e2) >>= (beta''' hm (ctxt))
                                _              -> do
                                                  e1'' <- beta''' hm (ctxt . app1C e2) e1'
                                                  e2'' <- beta''' hm (ctxt . app2C e1') e2
                                                  return $ App e1'' e2''
 beta''' hm ctxt (Lambda v e) =  fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
-beta''' hm ctxt (Var v) =   either return (beta''' hm ctxt) (lookupVar v ctxt hm) -- FIXME: limit execution steps
+beta''' hm ctxt xpr@(Var v) =   either return (checkExecution ctxt xpr . beta''' hm ctxt) (lookupVar v  hm)
+
+
+checkExecution :: Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+checkExecution ctxt xpr f =
+                   do
+                   numSubstitutions          <- lift $ get
+                   if numSubstitutions <= 0
+                   then do
+                        throwE $ ComputationExceedsLimitException $ ctxt $ xpr
+                   else
+                        do
+                        lift $ put (numSubstitutions - 1)
+                        f
 
 
 telegramMaxMessageSize:: Int

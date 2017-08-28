@@ -3,7 +3,7 @@ version:             0.1.0.0
 homepage:            https://github.com/githubuser/lambda-bot#readme
 license:             BSD3
 
-ghc-options: -Wall -O2 -rtsopts
+ghc-options: -Wall -O2
 
 tests:
   spec:
@@ -22,10 +22,12 @@ library:
 
 executables:
   lambda-bot:
+    ghc-options: -Wall -O2 -rtsopts
     main: app/Main.hs
     dependencies:
       - lambda-bot
   lambda-repl:
+    ghc-options: -Wall -O2 -rtsopts 
     main: repl/Main.hs
     dependencies:
       - lambda-bot
