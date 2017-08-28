@@ -12,6 +12,7 @@ module Shlambda(
       , basicVals
       , isRecursive
       , pprint
+      , singleStep
 
 ) where
 
@@ -277,11 +278,11 @@ substc''' :: HashMap String Expr -> Ctxt -> Expr -> Expr -> ExceptT EvaluationEr
 substc''' hm ctxt l@(Lambda v e1) e2 =
     do
       numSubstitutions          <- lift $ get
-      if numSubstitutions > 3000
+      if numSubstitutions <= 0
       then do
            throwE $ ComputationExceedsLimitException $ ctxt $ App l e2
       else do
-           lift $ put (numSubstitutions + 1)
+           lift $ put (numSubstitutions - 1)
            needsAlpha <- needsAlpha''' hm e2 l
            if (needsAlpha)
            then do
@@ -333,6 +334,28 @@ limitTrace :: String -> String
 limitTrace s = if length s < maxStackTraceSize then s else "..ommitted.. ..too big for telegram.."
 
 
+singleStep :: HashMap String Expr -> String -> String
+singleStep hm s = either (\err -> "Can not parse input: " ++ show err) id myres
+  where
+    myres   = fmap eval (parseExpression s)
+    eval ex   = case resOrFail of
+                 Left (VariableNotFoundException v) ->  "no such var " ++ v
+                 Left (ComputationExceedsLimitException r) -> limitTrace ("==> " ++ pprint r ++ "\n")
+
+                 Right (r) -> let
+                                r' =  ("==> " ++ pprint r ++ "\n")
+                              in case length r' of
+                                  l | l < maxMessageSize -> r'
+                                    | otherwise  -> let r'' = ("==> " ++ pprint r ++ "\n")
+                                                    in if  length r'' < maxMessageSize then r'' else "Wow. I could't even print result. It's too big for telegram."
+
+
+      where
+        (resOrFail, _) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 1
+
+
+
+
 traceOrFail''' :: HashMap String Expr -> String -> String
 traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id myres
   where
@@ -355,7 +378,7 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
 
 
       where
-        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 0
+        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 3000
         printT     ys   = concat $ fmap (\x ->  "==> " ++ x ++ "\n") ys
 
         printLambdaLog :: LambdaLog -> String
