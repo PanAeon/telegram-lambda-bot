@@ -21,7 +21,7 @@ import           Servant.Client
 import           System.IO
 import           Shlambda( beta''', parseExpression, Expr,
                          looksLikeValueDef, regularParse, variableDef, traceOrFail''', basicVals,
-                         pprint)
+                         pprint, evaluate, singleStep)
 import           Data.Text(Text)
 import           Control.Monad.IO.Class(liftIO)
 import           Control.Monad(void)
@@ -96,44 +96,52 @@ getVals chatId ss = hm
   where
     (ChatSession hm _) = HM.lookupDefault (ChatSession basicVals ChatSettings) chatId ss
 
+type Action = HashMap String Expr -> String -> String
+
 newMessage :: TelegramUpdate -> Handler String
 newMessage (TelegramUpdate (Just (TelegramMessage (TelegramChat chatId) (Just msgText)))) =
      do
      if L.isPrefixOf "/" msgText then
        case msgText of
-         _ | L.isPrefixOf "/run" msgText -> void $ liftIO $ handleMessage chatId ( drop 5 msgText)
+         _ | L.isPrefixOf "/run " msgText -> void $ liftIO $ handleMessage chatId ( drop 5 msgText) evaluate
+           | L.isPrefixOf "/set " msgText -> void $ liftIO $ handleMessage chatId ( drop 5 msgText) evaluate
+           | L.isPrefixOf "/trace " msgText -> void $ liftIO $ handleMessage chatId ( drop 7 msgText) traceOrFail'''
+           | L.isPrefixOf "/single " msgText -> void $ liftIO $ handleMessage chatId ( drop 8 msgText) singleStep
            | L.isPrefixOf "/help syntax" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                                 "λx.x\n" ++
                                                                 "\\x.x\n" ++
                                                                 "a b\n" ++
                                                                 "(a b)\n" ++
-                                                                "X = <expr>\n" ++
-                                                                "'0 = λf.λx.x"
+                                                                "f = <expr>\n" ++
+                                                                "0 = λf.λx.x"
                                                               )
            | L.isPrefixOf "/help" msgText -> liftIO $ doSendMsg (SendMessage chatId $
                                                          "\n" ++
-                                                         "/help              -  show this useles info\n" ++
-                                                         "/help syntax       -  print syntax help\n" ++
-                                                         "/show vals         -  print all defined vals\n" ++
-                                                         "/run <expr or def> - runs expr\n"
+                                                         "/help                 - show this useles info\n" ++
+                                                         "/help syntax          - print syntax help\n" ++
+                                                         "/show vals            - print all defined vals\n" ++
+                                                         "/run <expr or def>    - evaluates expr\n" ++
+                                                         "/trace <expr or def>  - trace expr\n" ++
+                                                         "/single <expr or def> - single steps expr\n" ++
+                                                         "/set f = <expr>       - assignment\n"
                                                        )
            | L.isPrefixOf "/show vals" msgText -> do
                                                     vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
                                                     let
-                                                      f (k, v) r = k ++ "  -  " ++ (pprint v) ++ "\n" ++ r -- FIXME: difference list
+                                                      f (k, v) r = k ++ "  -  " ++ (pprint v "") ++ "\n" ++ r -- FIXME: difference list
                                                       foo = L.sortBy (comparing fst) (HM.toList vals)
                                                       res = foldr f "" foo
                                                     liftIO $ doSendMsg (SendMessage chatId res )
            | otherwise                    -> liftIO $ doSendMsg (SendMessage chatId "unknown command")
      else
-      void $ liftIO $ handleMessage chatId msgText
+      void $ liftIO $ handleMessage chatId msgText evaluate
      return ""
 newMessage _ = return "ok"
 
 
 
-handleMessage :: Int -> String -> IO ThreadId
-handleMessage chatId msgText = forkIO $
+handleMessage :: Int -> String -> Action -> IO ThreadId
+handleMessage chatId msgText action = forkIO $
       do
         if looksLikeValueDef msgText then
             case regularParse variableDef msgText of
@@ -148,7 +156,7 @@ handleMessage chatId msgText = forkIO $
         else
           do
           vals <- fmap (getVals chatId) (liftIO $ readTVarIO sessionStorage)
-          doSendMsg (SendMessage  chatId $ traceOrFail''' vals msgText)
+          doSendMsg (SendMessage  chatId $ action vals msgText)
 
 
 

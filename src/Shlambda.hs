@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
+-- {-# LANGUAGE BangPatterns #-}
 module Shlambda(
         Expr(..)
       , parseExpression
@@ -10,16 +10,18 @@ module Shlambda(
       , looksLikeValueDef
       , traceOrFail'''
       , basicVals
-    --  , isRecursive
+      , logLimit
+      , evaluate
+      , telegramMaxMessageSize
       , pprint
       , singleStep
 
 ) where
 
 
--- FIXME: Ycomb '6 OOM
--- FIXME: normal vars, like this_isVar and `a` <- this is also var) equalize them)
--- FIXME: single step
+-- FIXED: Ycomb '6 OOM ! done
+-- FIXED: normal vars, like this_isVar and `a` <- this is also var) equalize them)
+-- FIXED: single step
 -- FIXME: check message size for telegram
 
 -- Buildpack :: https://github.com/mfine/heroku-buildpack-stack
@@ -42,22 +44,17 @@ module Shlambda(
 
 
 import Text.Parsec (ParseError)
-import Text.Parsec.Token(lexeme)
 import Text.Parsec.String (Parser)
-import Text.Parsec.Prim (parse, try, (<?>))
-import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string, noneOf)
-import Text.Parsec.Combinator (many1, chainl1, between, eof, optionMaybe,sepBy, notFollowedBy, anyToken)
-import Control.Applicative ((<$>), (<**>), (<*>), (<*), (*>), (<|>), many, (<$))
-import Control.Monad (void, ap, liftM2)
-import Data.Char (isLetter, isDigit)
-import qualified Data.Vector as V
-import Data.Char(digitToInt)
-import Data.List(delete, union, find)
-import Debug.Trace(trace, traceShow, traceShowId)
+import Text.Parsec.Prim (parse)
+import Text.Parsec.Char (oneOf, char, noneOf) -- satisfy
+import Text.Parsec.Combinator (many1, eof,sepBy)
+import Control.Applicative ((<$>), (<*>), (<*), (*>), (<|>), many)
+import Control.Monad (void)
+--import qualified Data.Vector as V
+--import Debug.Trace(trace, traceShow, traceShowId)
 import Control.Monad.Writer.Strict(Writer,tell)
-import Control.Monad.Trans.State.Lazy
+import Control.Monad.Trans.State.Strict
 import qualified Control.Monad.Writer.Strict as Writer
---import Control.Applicative
 import Control.Monad.Trans.Class(lift)
 import Control.Monad.Trans.Except
 import Data.HashMap.Lazy(HashMap)
@@ -65,14 +62,20 @@ import qualified Data.HashMap.Lazy as HM
 import Data.Set(Set)
 import qualified Data.Set as Set
 
-data Variable = Variable Char
 
+type EvaluationState = (Int, Int)
 
-data Cmd = Help
+type LambdaMonad a = ExceptT EvaluationError (StateT EvaluationState (Writer LambdaLog)) a
+
 
 data Expr = Var String  | App Expr Expr | Lambda String Expr  -- | const
             deriving (Show, Eq)
 
+
+type Ctxt = Expr -> Expr
+
+data EvaluationError = VariableLookupExceedsLimitException Expr |
+                       ComputationExceedsLimitException Expr deriving Show
 
 logLimit :: Int
 logLimit = 10
@@ -85,16 +88,16 @@ instance Monoid LambdaLog where
       LambdaLog fst5 totalLength lst5
     where
       totalLength = aLength + bLength
-      (!fst5, rst5) = splitAt 5 $ aHead ++ (reverse  aTail) ++ bHead ++ (reverse bTail)
-      !lst5 = take 5 $ reverse rst5--bTail ++ (reverse bHead) ++ aTail ++ (reverse aHead)
+      (fst5, rst5) = splitAt 5 $ aHead ++ reverse  aTail ++ bHead ++ reverse bTail
+      lst5 = take 5 $ reverse rst5--bTail ++ (reverse bHead) ++ aTail ++ (reverse aHead)
 
-logS :: String -> LambdaLog
-logS s = LambdaLog [s] 1 []
+logS :: ShowS -> LambdaLog
+logS s = LambdaLog [s ""] 1 []
 
-logSS :: [String] -> LambdaLog
-logSS xs = LambdaLog (take 5 xs) (length xs) (reverse $ drop 5 xs)
-  where
-    l = length xs
+-- logSS :: [String] -> LambdaLog
+-- logSS xs = LambdaLog (take 5 xs) (length xs) (reverse $ drop 5 xs)
+--   where
+--     l = length xs
 
 
 
@@ -105,10 +108,8 @@ parseOrFail s =  either (error . show)  id (regularParse expr'' s)
 regularParse :: Parser a -> String -> Either ParseError a
 regularParse p = parse p ""
 
-
 parseExpression :: String -> Either ParseError Expr
 parseExpression  = regularParse expr''
-
 
 looksLikeValueDef :: String -> Bool
 looksLikeValueDef s = either (const False) (const True) (regularParse (variableName <* ws' <* char '=' <* ws') s)
@@ -119,30 +120,17 @@ expr'' = expr' <* ws <* eof
 expr' :: Parser Expr
 expr' =  apply
 
-
-
-
-
-explodeApp :: [Expr] -> Expr
-explodeApp = foldl1 (\a -> \r -> App a r)
-
 apply :: Parser Expr
-apply =
-   ((,) <$> (expr <* ws) <*> (expr `sepBy` ws) ) >>= ( \foo ->
-      case foo of
-         (e1, []) -> return $ e1
-         (e1, xs) -> return $ (explodeApp $ e1:xs)
-   )
-
+apply = varOrApp <$> (expr <* ws) <*> (expr `sepBy` ws)
+   where
+     varOrApp e1 [] =  e1
+     varOrApp e1 xs =  foldl1 App $ e1:xs
 
 expr :: Parser Expr
 expr =
-        lambda
+            lambda
         <|> variable
-        <|> (parens expr')
-
-
-
+        <|> parens expr'
 
 variable :: Parser Expr
 variable = Var <$> variableName
@@ -150,27 +138,17 @@ variable = Var <$> variableName
 variableName :: Parser String
 variableName = many1 (noneOf ".()\\λ \n\t")
 
-
 variableDef :: Parser (String, Expr)
 variableDef = (,) <$> (variableName <* ws <* char '=' <* ws) <*> expr''
-
-
-
 
 lambda :: Parser Expr
 lambda =  Lambda <$> (  lambdaLit *> ws *> variableName <* ws <* char '.' <* ws) <*> (expr' <* ws )
 
 lambdaLit :: Parser Char
-lambdaLit = oneOf ['\\', 'λ', '+']
-
-
-
-
-
+lambdaLit = oneOf ['\\', 'λ']
 
 parens :: Parser a -> Parser a
 parens p =  char '(' *> ws *>  p <* ws <*  char ')'
-
 
 ws :: Parser ()
 ws = void $ many $ oneOf " \n\t"
@@ -181,32 +159,26 @@ ws' = void $ many1 $ oneOf " \n\t"
 
 
 
-
-
-
 -- http://www.cs.cornell.edu/courses/cs6110/2014sp/Handouts/Sestoft.pdf
 
 
 
 
-type Ctxt = Expr -> Expr
-
 lambdaC :: String -> Expr -> Expr
-lambdaC x = Lambda x
+lambdaC = Lambda
 app2C :: Expr -> Expr -> Expr
-app2C e1  = App e1
+app2C  = App
 app1C :: Expr -> Expr -> Expr
-app1C e2  = flip (App) e2
+app1C  = flip App
 
 
 
 
-data EvaluationError = VariableNotFoundException String |
-                       ComputationExceedsLimitException Expr deriving Show
 
 
 
-subst''' :: String -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+
+subst''' :: String -> Expr -> Expr -> LambdaMonad Expr
 subst'''  c e2 v@(Var y) | c == y       = return e2
                            | otherwise    = return v
 subst'''  c e2 (App a b)  = do
@@ -215,16 +187,6 @@ subst'''  c e2 (App a b)  = do
                                 return $ App e1' e2'
 subst'''  c e2 l@(Lambda y f) | c == y = return l
                                 | otherwise = fmap (Lambda y) (subst'''  c e2 f)
-                                              -- do
-                                              -- freeVNotFixed <- fmap (elem c) (freeV''' hm e2)
-                                              -- if freeVNotFixed
-                                              --    then
-                                              --      error $ "error in subst: '" ++ [c] ++ "' in FW " ++ (show e2)
-                                              --    else
-                                              --      fmap (Lambda y) (subst''' hm c e2 f)
-
-
-
 
 
 alpha'''::  String -> String -> Expr ->  Expr
@@ -235,53 +197,38 @@ alpha'''  x z (Lambda y f) | x == y =   Lambda y f
                              | otherwise =  Lambda y (alpha'''  x z f)
 
 
-freeV''' ::  Expr -> Set String -- FIXME: this method is not writer !!!
+freeV''' ::  Expr -> Set String
 freeV'''  (Var x) =   Set.singleton x
-freeV'''  (Lambda x t) =  (Set.delete x) $ freeV''' t
+freeV'''  (Lambda x t) =  Set.delete x $ freeV''' t
 freeV'''  (App e1 e2) =  Set.union (freeV'''  e1) (freeV'''  e2)
 
 
-size''' ::  Expr -> Int
-size'''  (Var x) = 1
-size'''  (Lambda _ t) =1 + size''' t
-size'''  (App e1 e2) = size''' e1 + size''' e2
+needsAlpha''' ::  Expr -> Expr ->  Bool
+needsAlpha'''  e2 (Lambda y _) =  y `elem` freeV''' e2
+needsAlpha'''  _ _             =  False
 
 
-needsAlpha''' ::  Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Bool -- FIXME: this method is not writer !!!
-needsAlpha'''  e2 (Lambda y _) = return $  (elem y) (freeV''' e2)
-needsAlpha'''  _ _             = return False
+fixFreeVars''' ::  Expr -> Expr ->  (String, Expr)
+fixFreeVars'''  e2 (Lambda x e1) = let
+                                       symbols = fmap (\i -> x ++ show (i::Int)) [1..]
+                                       fv      = freeV'''  e2
+                                       s       = head $ filter (`notElem`  fv) symbols
+                                   in  (s, alpha'''  x s e1)
 
+fixFreeVars''' _ _ = error "wrong call to fix free vars"
 
-fixFreeVars''' ::  Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (String, Expr) -- FIXME: this method is not writer !!!
-fixFreeVars'''  e2 (Lambda x e1) = do
-                                         let symbols = fmap (\i -> x ++ (show i)) [1..]
-                                         let fv      = freeV'''  e2
-                                         let s       = head $ filter (\z -> not $ elem z fv) symbols
-                                         return (s, alpha'''  x s e1)
-
-
-
-
-
-substc''' ::  Ctxt -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+substc''' ::  Ctxt -> Expr -> Expr -> LambdaMonad Expr
 substc'''  ctxt l@(Lambda v e1) e2 =
-    do
-      numSubstitutions          <- lift $ get
-      if numSubstitutions <= 0
-      then do
-           throwE $ ComputationExceedsLimitException $ ctxt $ App l e2
-      else do
-           lift $ put (numSubstitutions - 1)
-           needsAlpha <- needsAlpha'''  e2 l
-           if (needsAlpha)
+    checkExecution ctxt l $
+           if needsAlpha'''  e2 l
            then do
-                 (v', e1') <- fixFreeVars'''  e2 l
+                 let (v', e1') = fixFreeVars'''  e2 l
                  lift $ tell $ logS $ pprint $ ctxt $ App l e2
                  subst'''  v' e2 e1'
            else do
                  lift $ tell $ logS $ pprint $ ctxt $ App l e2
                  subst'''  v e2 e1
-
+substc''' _ _ _ = error "Wrong substitution call!"
 
 
 maybeToEither :: a -> Maybe b -> Either a b
@@ -290,39 +237,49 @@ maybeToEither = flip maybe Right . Left
 lookupVar :: String -> HashMap String Expr -> Either Expr Expr
 lookupVar v  hm = maybeToEither (Var v) (HM.lookup v hm)
 
-cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-cbn''' hm ctxt xpr@(Var v) = either return (checkExecution ctxt xpr . cbn''' hm ctxt) (lookupVar v  hm)
+cbn''' :: HashMap String Expr -> Ctxt -> Expr -> LambdaMonad Expr
+cbn''' hm ctxt xpr@(Var v) = either return (checkLookups ctxt xpr . cbn''' hm ctxt) (lookupVar v  hm)
 cbn''' _ _ l@(Lambda _ _) = return l
-cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
+cbn''' hm ctxt (App e1 e2) = cbn''' hm (ctxt . app1C e2) e1 >>= \e1' ->
                           case e1' of
-                            l@(Lambda _ _) ->  (substc'''  ctxt l e2) >>= (cbn''' hm ctxt)
+                            l@(Lambda _ _) ->  substc'''  ctxt l e2 >>= cbn''' hm ctxt
                             _              -> return $ App e1' e2
 
 
 -- FIXME: user bloody reader, merge contexts (for context is better to use state?)
-beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-beta''' hm ctxt (App e1 e2) =   (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
+beta''' :: HashMap String Expr -> Ctxt -> Expr -> LambdaMonad Expr
+beta''' hm ctxt (App e1 e2) =   cbn''' hm (ctxt . app1C e2) e1 >>= \e1' ->
                              case e1' of
-                               l@(Lambda _ _) ->  (substc'''  ctxt l e2) >>= (beta''' hm (ctxt))
+                               l@(Lambda _ _) ->  substc'''  ctxt l e2 >>= beta''' hm ctxt
                                _              -> do
                                                  e1'' <- beta''' hm (ctxt . app1C e2) e1'
                                                  e2'' <- beta''' hm (ctxt . app2C e1') e2
                                                  return $ App e1'' e2''
-beta''' hm ctxt (Lambda v e) =  fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
-beta''' hm ctxt xpr@(Var v) =   either return (checkExecution ctxt xpr . beta''' hm ctxt) (lookupVar v  hm)
+beta''' hm ctxt (Lambda v e) =  Lambda v <$> beta''' hm (ctxt . lambdaC v) e
+beta''' hm ctxt xpr@(Var v) =   either return (checkLookups ctxt xpr . beta''' hm ctxt) (lookupVar v  hm)
 
 
-checkExecution :: Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
+checkLookups :: Ctxt -> Expr -> LambdaMonad Expr -> LambdaMonad Expr
+checkLookups ctxt xpr f =
+                   do
+                   (numSubstitutions, numLookups)          <- lift get
+                   if numLookups <= 0
+                   then
+                     throwE $ VariableLookupExceedsLimitException $ ctxt xpr
+                   else
+                        lift ( put (numSubstitutions, numLookups - 1)) >> f
+
+
+checkExecution :: Ctxt -> Expr -> LambdaMonad Expr -> LambdaMonad Expr
 checkExecution ctxt xpr f =
                    do
-                   numSubstitutions          <- lift $ get
+                   (numSubstitutions, _)          <- lift get
                    if numSubstitutions <= 0
-                   then do
-                        throwE $ ComputationExceedsLimitException $ ctxt $ xpr
+                   then
+                        throwE $ ComputationExceedsLimitException $ ctxt xpr
                    else
-                        do
-                        lift $ put (numSubstitutions - 1)
-                        f
+                        lift ( put (numSubstitutions - 1, 50)) >> f
+
 
 
 telegramMaxMessageSize:: Int
@@ -338,26 +295,55 @@ limitTrace :: String -> String
 limitTrace s = if length s < maxStackTraceSize then s else "..ommitted.. ..too big for telegram.."
 
 
+trimLongMessage :: Int -> String -> String
+trimLongMessage limit str = if length str < limit
+                            then str
+                            else (take maxMessageSize str) ++ " ... <trimmed|"
+
 singleStep :: HashMap String Expr -> String -> String
 singleStep hm s = either (\err -> "Can not parse input: " ++ show err) id myres
   where
     myres   = fmap eval (parseExpression s)
     eval ex   = case resOrFail of
-                 Left (VariableNotFoundException v) ->  "no such var " ++ v
-                 Left (ComputationExceedsLimitException r) -> limitTrace ("==> " ++ pprint r ++ "\n")
-
-                 Right (r) -> let
-                                r' =  ("==> " ++ pprint r ++ "\n")
+                 Left (ComputationExceedsLimitException r) -> limitTrace ("==> " ++ pprint r "" ++ "\n")
+                 Left (VariableLookupExceedsLimitException r) -> "variable lookup exceeds limit: " ++ limitTrace ("==> " ++ pprint r "" ++ "\n")
+                 Right r -> let
+                                r' =  ("==> " ++ pprint r "" ++ "\n")
                               in case length r' of
                                   l | l < maxMessageSize -> r'
-                                    | otherwise  -> let r'' = ("==> " ++ pprint r ++ "\n")
+                                    | otherwise  -> let r'' = ("==> " ++ pprint r ""++ "\n")
                                                     in if  length r'' < maxMessageSize then r'' else "Wow. I could't even print result. It's too big for telegram."
 
 
       where
-        (resOrFail, _) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 1
+        (resOrFail, _) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) (1, 50)
 
 
+
+
+evaluate :: HashMap String Expr -> String -> String
+evaluate hm s = either (\err -> "Can not parse input: " ++ show err) id myres
+  where
+    maybeExpr = parseExpression s
+    myres     = fmap eval maybeExpr
+    eval ex   = case resOrFail of
+                 Left (ComputationExceedsLimitException r) -> "Computation took to long to complete. sorry..\n" ++
+                                                                "Trace:\n" ++
+                                                                trimLongMessage maxStackTraceSize (printLambdaLog ll) ++
+                                                                "Last result:\n" ++
+                                                                trimLongMessage maxStackTraceSize ("==> " ++ pprint r "" ++ "\n")
+
+                 Left (VariableLookupExceedsLimitException r) -> "Variable lookup exceeds limit. sorry..\n" ++
+                                                                "Trace:\n" ++
+                                                                trimLongMessage maxStackTraceSize (printLambdaLog ll) ++
+                                                                "Last result:\n" ++
+                                                                trimLongMessage maxStackTraceSize ("==> " ++ pprint r "" ++ "\n")
+
+                 Right r -> trimLongMessage maxMessageSize $ "==> " ++ pprint r "" ++ "\n"
+
+
+      where
+        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) (10000, 50)
 
 
 traceOrFail''' :: HashMap String Expr -> String -> String
@@ -366,53 +352,43 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
     maybeExpr = parseExpression s
     myres     = fmap eval maybeExpr
     eval ex   = case resOrFail of
-                 Left (VariableNotFoundException v) ->  "no such var " ++ v
-                 Left (ComputationExceedsLimitException r) -> ("Computation took to long to complete. sorry..\n" ++
+                 Left (ComputationExceedsLimitException r) -> "Computation took to long to complete. sorry..\n" ++
                                                                 "Trace:\n" ++
-                                                                limitTrace(printLambdaLog ll) ++
+                                                                trimLongMessage maxStackTraceSize (printLambdaLog ll) ++
                                                                 "Last result:\n" ++
-                                                                limitTrace ("==> " ++ pprint r ++ "\n")
-                                                               )
-                 Right (r) -> let
-                                r' = (printLambdaLog ll) ++ ("==> " ++ pprint r ++ "\n")
-                              in case length r' of
-                                  l | l < maxMessageSize -> r'
-                                    | otherwise  -> let r'' = ("==> " ++ pprint r ++ "\n")
-                                                    in if  length r'' < maxMessageSize then r'' else "Wow. I could't even print result. It's too big for telegram."
+                                                                trimLongMessage maxStackTraceSize ("==> " ++ pprint r "" ++ "\n")
+
+                 Left (VariableLookupExceedsLimitException r) -> "Variable lookup exceeds limit. sorry..\n" ++
+                                                                "Trace:\n" ++
+                                                                trimLongMessage maxStackTraceSize (printLambdaLog ll) ++
+                                                                "Last result:\n" ++
+                                                                trimLongMessage maxStackTraceSize  ("==> " ++ pprint r "" ++ "\n")
+
+                 Right r ->  trimLongMessage maxStackTraceSize (printLambdaLog ll) ++
+                                     trimLongMessage maxStackTraceSize ("==> " ++ pprint r "" ++ "\n")
+
 
 
       where
-        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) 3000
-        printT     ys   = concat $ fmap (\x ->  "==> " ++ x ++ "\n") ys
-
-        printLambdaLog :: LambdaLog -> String
-        printLambdaLog (LambdaLog logH ls logT) =
-          if (ls < 10)
-          then printT (logH  ++ reverse logT)
-          else printT logH ++ ( "==> ... skipped " ++ (show $ ls - 10) ++ " lines ...\n" ) ++ printT (reverse logT)
+        (resOrFail, ll) =  Writer.runWriter $ evalStateT  (runExceptT (beta''' hm id ex)) (10000, 50)
 
 
+printLambdaLog :: LambdaLog -> String
+printLambdaLog (LambdaLog logH ls logT) =
+    if ls <= 10
+    then printT (logH  ++ reverse logT)
+    else printT logH ++ ( "==> ... skipped " ++ show (ls - 10) ++ " lines ...\n" ) ++ printT (reverse logT)
 
-        printTrace ys = if length ys < 25
-                          then
-                             printT ys
-                          else
-                             let
-                               header = take 5 ys
-                               footer = drop (length ys - 5) ys
-                               middle = "==> ... skipped " ++ (show $ length ys - 10) ++ " lines ...\n"
-                             in
-                               printT header ++ middle ++ (printT footer)
+printT :: [String] -> String
+printT        = concatMap (\x ->  "==> " ++ x ++ "\n")
 
-
-
-pprint :: Expr -> String
-pprint (Var a) = a
-pprint (App a b@(App _ _)) = pprint a ++ " " ++ "(" ++ pprint b ++ ")"
-pprint (App a@(App _ _) b) =    pprint a ++ " " ++ pprint b
-pprint (App l@(Lambda _ _) b) = "(" ++ pprint l ++ ")" ++ " " ++ pprint b
-pprint (App a b) = "" ++ pprint a ++ " " ++ pprint b ++ ""
-pprint (Lambda x b) =  "λ" ++ x ++ "." ++ pprint b
+pprint :: Expr -> ShowS
+pprint (Var a) = showString a
+pprint (App a b@(App _ _)) = pprint a . showString " " . showString "(" . pprint b  . showString ")"
+pprint (App a@(App _ _) b) =    pprint a . showString " " . pprint b
+pprint (App l@(Lambda _ _) b) = showString "(" . pprint l . showString ")" . showString " " . pprint b
+pprint (App a b) = showString "" . pprint a . showString " " . pprint b . showString ""
+pprint (Lambda x b) =  showString "λ" . showString x .showString  "." . pprint b
 
 
 
@@ -421,58 +397,63 @@ pprint (Lambda x b) =  "λ" ++ x ++ "." ++ pprint b
 
 basicVals :: HashMap String Expr
 basicVals = HM.fromList [
-  ("'0" , parseOrFail "λf.λx.x"),
-  ("'1" , parseOrFail "λf.λx.f x"),
-  ("'2" , parseOrFail "λf.λx.f (f x)"),
+  ("0" , parseOrFail "λf.λx.x"),
+  ("1" , parseOrFail "λf.λx.f x"),
+  ("2" , parseOrFail "λf.λx.f (f x)"),
+  ("3" , parseOrFail "λf.λx.f (f (f x))"),
+  ("4" , parseOrFail "λf.λx.f (f (f (f x)))"),
+  ("5" , parseOrFail "λf.λx.f (f (f (f (f x))))"),
+  ("6" , parseOrFail "λf.λx.f (f (f (f (f (f x)))))"),
+  ("7" , parseOrFail "λf.λx.f (f (f (f (f (f (f x))))))"),
+  ("8" , parseOrFail "λf.λx.f (f (f (f (f (f (f (f x)))))))"),
+  ("9" , parseOrFail "λf.λx.f (f (f (f (f (f (f (f (f x))))))))"),
 
-  ("'6" , parseOrFail "λf.λx.f (f (f (f (f (f x)))))"),
+  ("succ" , parseOrFail "λn.λf.λx.f (n f x)"),
+  ("+" , parseOrFail "λa.λb.a succ b"),
+  ("*" , parseOrFail "λa.λb.a (b succ) 0"),
 
-  ("Succ" , parseOrFail "λn.λf.λx.f (n f x)"),
-  ("'+" , parseOrFail "λa.λb.a Succ b"),
-  ("Mult" , parseOrFail "λa.λb.a (b Succ) '0"),
+  ("pair" , parseOrFail "λa.λb.λf.f a b"),
+  ("fst" , parseOrFail "λc.c (λa.λb.a)"),
+  ("snd" , parseOrFail "λc.c (λa.λb.b)"),
 
-  ("Pair" , parseOrFail "λa.λb.λf.f a b"),
-  ("Fst" , parseOrFail "λc.c (λa.λb.a)"),
-  ("Snd" , parseOrFail "λc.c (λa.λb.b)"),
+  ("0s" , parseOrFail "pair 0 0"),
+  ("foo" , parseOrFail "λp.pair (snd p) (succ (snd p))"),
+  ("1?" , parseOrFail "λn.fst (n foo 0s)"),
 
-  ("Zeroes" , parseOrFail "Pair '0 '0"),
-  ("Foo" , parseOrFail "λp.Pair (Snd p) (Succ (Snd p))"),
-  ("'1Pred" , parseOrFail "λn.Fst (n Foo Zeroes)"),
+  ("pz" , parseOrFail "λx.0"),
+  ("pf" , parseOrFail "λg.λh.h (g succ)"),
+  ("id" , parseOrFail "λx.x"),
+  ("ANotherPred" , parseOrFail "λn.n pf pz id"),
 
-  ("Pz" , parseOrFail "λx.'0"),
-  ("Pf" , parseOrFail "λg.λh.h (g Succ)"),
-  ("Id" , parseOrFail "λx.x"),
-  ("ANotherPred" , parseOrFail "λn.n Pf Pz Id"),
+  ("pred" , parseOrFail "λn.λf.λx.n (λg.λh.h (g f)) (λ_.x) id"),
 
-  ("Pred" , parseOrFail "λn.λf.λx.n (λg.λh.h (g f)) (λ_.x) Id"),
+  ("-" , parseOrFail "λa.λb.b pred a"),
 
-  ("'-" , parseOrFail "λa.λb.b Pred a"),
+  ("true" , parseOrFail "λx.λy.x"),
+  ("false" , parseOrFail "λx.λy.y"),
+  ("if" , parseOrFail "λp.λc.λa.p c a"),
+  ("&&" , parseOrFail "λa.λb.if a b false"),
+  ("!" , parseOrFail "λp.λa.λb.p b a"),
 
-  ("True" , parseOrFail "λx.λy.x"),
-  ("False" , parseOrFail "λx.λy.y"),
-  ("If" , parseOrFail "λp.λc.λa.p c a"),
-  ("And" , parseOrFail "λa.λb.If a b False"),
-  ("Not" , parseOrFail "λp.λa.λb.p b a"),
+  ("0?" , parseOrFail "λn.n (λ_.false) true"),
+  ("<=" , parseOrFail "λa.λb.(0? (- a b))"),
+  ("=" , parseOrFail "λa.λb.&& (<= a b) (<= b a)"),
 
-  ("'0?" , parseOrFail "λn.n (λ_.False) True"),
-  ("'<=" , parseOrFail "λa.λb.('0? ('- a b))"),
-  ("'=" , parseOrFail "λa.λb.And ('<= a b) ('<= b a)"),
+  ("nil" , parseOrFail "λc.λn.n"),
+  ("nil?" , parseOrFail "λl.l (λ_.λ_.false) true"),
+  ("::" , parseOrFail "λh.λt.λc.λn.c h (t c n)"),
+  ("head" , parseOrFail "λl.l (λh.λt.h) false"),
+  ("++" , parseOrFail "λa.λb.a cons b"),
 
-  ("Nil" , parseOrFail "λc.λn.n"),
-  ("IsNil" , parseOrFail "λl.l (λ_.λ_.False) True"),
-  ("Cons" , parseOrFail "λh.λt.λc.λn.c h (t c n)"),
-  ("Head" , parseOrFail "λl.l (λh.λt.h) False"),
-  ("Append" , parseOrFail "λa.λb.a Cons b"),
+  ("nils" , parseOrFail "(cons Nil Nil)"),
+  ("bar" , parseOrFail "λh.λp.pair (snd p) (cons h (snd p))"),
+  ("tail" , parseOrFail "λl.fst (l bar nils)"),
 
-  ("Nils" , parseOrFail "(Cons Nil Nil)"),
-  ("Bar" , parseOrFail "λh.λp.Pair (Snd p) (Cons h (Snd p))"),
-  ("Tail" , parseOrFail "λl.Fst (l Bar Nils)"),
+  ("Y" , parseOrFail "(λf.(λx.f (x x)) (λx.f (x x)))"),
+  ("fib'" , parseOrFail "λf.λn.if (<= n 1) n ( + ( f (pred n)) (f (pred (pred n))))"),
+  ("fib" , parseOrFail "Y fib'"),
 
-  ("Ycomb" , parseOrFail "(λf.(λx.f (x x)) (λx.f (x x)))"),
-  ("Fib'" , parseOrFail "λf.λn.If ('<= n '1) n ('+ (f (Pred n)) (f (Pred (Pred n))))"),
-  ("Fib" , parseOrFail "Ycomb Fib'"),
-
-  ("EvenoddMult" , parseOrFail "λf.Pair (λn.If ('0? n) True ((Snd f) (Pred n))) (λn.If ('0? n) False ((Fst f) (Pred n)))"),
-  ("Evenodd" , parseOrFail "Ycomb EvenoddMult"),
-  ("IsEven" , parseOrFail "Fst Evenodd"),
-  ("IsOdd" , parseOrFail "Snd Evenodd")]
+  ("evenodd'" , parseOrFail "λf.pair (λn.if (0? n) true ((snd f) (pred n))) (λn.if (0? n) false ((fst f) (pred n)))"),
+  ("evenodd" , parseOrFail "Y evenodd'"),
+  ("even?" , parseOrFail "fst evenodd"),
+  ("odd?" , parseOrFail "snd evenodd")]
