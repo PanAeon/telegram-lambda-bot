@@ -4,13 +4,13 @@ module Shlambda(
       , parseExpression
       , regularParse
       , parseOrFail
-      , valP
-      , valDef
+      , variable
+      , variableDef
       , beta'''
       , looksLikeValueDef
       , traceOrFail'''
       , basicVals
-      , isRecursive
+    --  , isRecursive
       , pprint
       , singleStep
 
@@ -45,7 +45,7 @@ import Text.Parsec (ParseError)
 import Text.Parsec.Token(lexeme)
 import Text.Parsec.String (Parser)
 import Text.Parsec.Prim (parse, try, (<?>))
-import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string)
+import Text.Parsec.Char (oneOf, char, digit, letter, satisfy, string, noneOf)
 import Text.Parsec.Combinator (many1, chainl1, between, eof, optionMaybe,sepBy, notFollowedBy, anyToken)
 import Control.Applicative ((<$>), (<**>), (<*>), (<*), (*>), (<|>), many, (<$))
 import Control.Monad (void, ap, liftM2)
@@ -68,7 +68,7 @@ data Variable = Variable Char
 
 data Cmd = Help
 
-data Expr = Var Char  | App Expr Expr | Lambda Char Expr | Val String -- | const
+data Expr = Var String  | App Expr Expr | Lambda String Expr  -- | const
             deriving (Show, Eq)
 
 
@@ -109,7 +109,7 @@ parseExpression  = regularParse expr''
 
 
 looksLikeValueDef :: String -> Bool
-looksLikeValueDef s = either (const False) (const True) (regularParse (valP <* ws <* char '=' <* ws) s)
+looksLikeValueDef s = either (const False) (const True) (regularParse (variableName <* ws' <* char '=' <* ws') s)
 
 expr'' :: Parser Expr
 expr'' = expr' <* ws <* eof
@@ -117,8 +117,7 @@ expr'' = expr' <* ws <* eof
 expr' :: Parser Expr
 expr' =  apply
 
-pexpr' :: Parser Expr
-pexpr' = parens expr'
+
 
 
 
@@ -138,36 +137,31 @@ expr :: Parser Expr
 expr =
         lambda
         <|> variable
-        <|> valP
         <|> (parens expr')
 
 
 
 
-valP :: Parser Expr
-valP = fmap Val $ (:) <$> oneOf ('\'':['A'..'Z']) <*> many (oneOf $ '_':'\'':['A'..'Z']++['a'..'z']++['0'..'9']++['+','-','=', '/', '*', '<', '>', '?'] ) -- FIXME: efficiency
+variable :: Parser Expr
+variable = Var <$> variableName
+
+variableName :: Parser String
+variableName = many1 (noneOf ".()\\λ \n\t")
 
 
-valDef :: Parser (String, Expr)
-valDef = (,) <$> ((fmap getValName valP) <* ws <* char '=' <* ws) <*> expr''
+variableDef :: Parser (String, Expr)
+variableDef = (,) <$> (variableName <* ws <* char '=' <* ws) <*> expr''
 
 
 
-getValName :: Expr -> String
-getValName (Val name) = name
-getValName _ = error "trying to get name of Expr"
-
-app :: Parser Expr
-app =  App <$> (expr' <* ws') <*> (expr')
 
 lambda :: Parser Expr
-lambda =  Lambda <$> (  lambdaLit *> ws *> (oneOf ('_':['a'..'z'])) <* ws <* char '.' <* ws) <*> (expr' <* ws )
+lambda =  Lambda <$> (  lambdaLit *> ws *> variableName <* ws <* char '.' <* ws) <*> (expr' <* ws )
 
 lambdaLit :: Parser Char
 lambdaLit = oneOf ['\\', 'λ', '+']
 
-variable :: Parser Expr
-variable = fmap Var $ oneOf ['a'..'z']
+
 
 
 
@@ -195,7 +189,7 @@ ws' = void $ many1 $ oneOf " \n\t"
 
 type Ctxt = Expr -> Expr
 
-lambdaC :: Char -> Expr -> Expr
+lambdaC :: String -> Expr -> Expr
 lambdaC x = Lambda x
 app2C :: Expr -> Expr -> Expr
 app2C e1  = App e1
@@ -210,17 +204,7 @@ data EvaluationError = VariableNotFoundException String |
 
 
 
-isRecursive :: HashMap String Expr -> String -> Expr -> Either String Bool
-isRecursive hm n (Val v) = if v == n
-                           then return True
-                           else maybe (Left $ "Variable " ++ v ++ " not found!") (isRecursive hm n ) (HM.lookup v hm)
-isRecursive _  _ (Var _) = return False
-isRecursive hm n (App a b) = (||) <$> isRecursive hm n a <*> isRecursive hm n b
-isRecursive hm n (Lambda _ f) = isRecursive hm n f
-
-
-subst''' :: HashMap String Expr -> Char -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-subst''' hm c e2 (Val v) =  lookupVar v id hm (subst''' hm c e2)
+subst''' :: HashMap String Expr -> String -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 subst''' hm c e2 v@(Var y) | c == y       = return e2
                            | otherwise    = return v
 subst''' hm c e2 (App a b)  = do
@@ -241,8 +225,7 @@ subst''' hm c e2 l@(Lambda y f) | c == y = return l
 
 
 
-alpha''':: HashMap String Expr -> Char -> Char -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-alpha''' hm x z (Val v) = lookupVar v id hm (alpha''' hm x z)
+alpha''':: HashMap String Expr -> String -> String -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
 alpha''' hm x z (Var y) | x == y    = return $ Var z
                         | otherwise =  return  $ Var y
 alpha''' hm x z (App a b) = App <$> (alpha''' hm x z a) <*> (alpha''' hm x z b)
@@ -250,24 +233,22 @@ alpha''' hm x z (Lambda y f) | x == y = return $ Lambda y f
                              | otherwise = fmap (Lambda y) (alpha''' hm x z f)
 
 
-freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) [Char] -- FIXME: this method is not writer !!!
-freeV''' hm (Val v) = lookupVar v id hm (freeV''' hm)
-freeV''' _ (Var x) = return [x]
+freeV''' :: HashMap String Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) [String] -- FIXME: this method is not writer !!!
+freeV''' hm (Var x) = either (return . const [x]) (freeV''' hm) (lookupVar x id hm) -- FIXME: limit execution steps
 freeV''' hm (Lambda x t) = fmap (delete x) $ freeV''' hm t
 freeV''' hm (App e1 e2) = (liftM2 union) (freeV''' hm e1) (freeV''' hm e2)
 
 
 needsAlpha''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Bool -- FIXME: this method is not writer !!!
 needsAlpha''' hm e2 (Lambda y _) = fmap (elem y) (freeV''' hm e2)
-needsAlpha''' _  _  (Val v)     = error "needsAlpha''' Val is not implemented!!"
 needsAlpha''' _ _ _             = return False
 
 
-fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (Char, Expr) -- FIXME: this method is not writer !!!
+fixFreeVars''' :: HashMap String Expr -> Expr -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) (String, Expr) -- FIXME: this method is not writer !!!
 fixFreeVars''' hm e2 (Lambda x e1) = do
-                                         let symbols = ['a'..'z']
+                                         let symbols = fmap (\i -> x ++ (show i)) [1..]
                                          fv      <- freeV''' hm e2
-                                         let s       = maybe (error "not enough vars!") id $ find (\z -> not $ elem z fv) symbols
+                                         let s       = head $ filter (\z -> not $ elem z fv) symbols
                                          fmap (\y -> (s,y)) (alpha''' hm x s e1)
 
 
@@ -294,12 +275,15 @@ substc''' hm ctxt l@(Lambda v e1) e2 =
                  subst''' hm v e2 e1
 
 
-lookupVar :: String -> Ctxt -> HashMap String Expr -> (Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) a) -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) a
-lookupVar v ctxt hm f = maybe (throwE $ VariableNotFoundException v) (f) (HM.lookup v hm)
+
+maybeToEither :: a -> Maybe b -> Either a b
+maybeToEither = flip maybe Right . Left
+
+lookupVar :: String -> Ctxt -> HashMap String Expr -> Either Expr Expr
+lookupVar v ctxt hm = maybeToEither (Var v) (HM.lookup v hm)
 
 cbn''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-cbn''' hm ctxt (Val v) = lookupVar v ctxt hm (cbn''' hm ctxt)
-cbn''' _ _ v@(Var _) = return v
+cbn''' hm ctxt (Var v) = either return (cbn''' hm ctxt) (lookupVar v ctxt hm) -- FIXME: limit execution steps
 cbn''' _ _ l@(Lambda _ _) = return l
 cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                           case e1' of
@@ -309,7 +293,6 @@ cbn''' hm ctxt (App e1 e2) = (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
 
 -- FIXME: user bloody reader, merge contexts (for context is better to use state?)
 beta''' :: HashMap String Expr -> Ctxt -> Expr -> ExceptT EvaluationError (StateT Int (Writer LambdaLog)) Expr
-beta''' hm ctxt (Val v) =  lookupVar v ctxt hm (beta''' hm ctxt)
 beta''' hm ctxt (App e1 e2) =   (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                              case e1' of
                                l@(Lambda _ _) ->  (substc''' hm ctxt l e2) >>= (beta''' hm (ctxt))
@@ -318,7 +301,7 @@ beta''' hm ctxt (App e1 e2) =   (cbn''' hm (ctxt . app1C e2) e1) >>= \e1' ->
                                                  e2'' <- beta''' hm (ctxt . app2C e1') e2
                                                  return $ App e1'' e2''
 beta''' hm ctxt (Lambda v e) =  fmap (Lambda v) $ beta''' hm (ctxt . lambdaC v) e
-beta''' _ _ v@(Var _) = return v
+beta''' hm ctxt (Var v) =   either return (beta''' hm ctxt) (lookupVar v ctxt hm) -- FIXME: limit execution steps
 
 
 telegramMaxMessageSize:: Int
@@ -403,13 +386,13 @@ traceOrFail''' hm s = either (\err -> "Can not parse input: " ++ show err) id my
 
 
 pprint :: Expr -> String
-pprint (Var a) = [a]
+pprint (Var a) = a
 pprint (App a b@(App _ _)) = pprint a ++ " " ++ "(" ++ pprint b ++ ")"
 pprint (App a@(App _ _) b) =    pprint a ++ " " ++ pprint b
 pprint (App l@(Lambda _ _) b) = "(" ++ pprint l ++ ")" ++ " " ++ pprint b
 pprint (App a b) = "" ++ pprint a ++ " " ++ pprint b ++ ""
-pprint (Lambda x b) =  "λ" ++ [x] ++ "." ++ pprint b
-pprint (Val v) = v
+pprint (Lambda x b) =  "λ" ++ x ++ "." ++ pprint b
+
 
 
 
