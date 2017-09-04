@@ -43,9 +43,11 @@ library
     , trifecta
   exposed-modules:
       App
+      DynamicDispatch
       GentleMonadTransformers
       Lambda
       Shlambda
+      TrifectaLambdaParser
   default-language: Haskell2010
 
 executable lambda-bot

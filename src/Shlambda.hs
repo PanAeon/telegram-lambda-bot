@@ -18,15 +18,15 @@ module Shlambda(
 
 ) where
 
-
+-- Changelog:
 -- FIXED: Ycomb '6 OOM ! done
 -- FIXED: normal vars, like this_isVar and `a` <- this is also var) equalize them)
 -- FIXED: single step
--- FIXME: check message size for telegram
+-- FIXED: check message size for telegram
 
 -- Buildpack :: https://github.com/mfine/heroku-buildpack-stack
 
--- https://core.telegram.org/bots/api#sendmessage
+
 
 
 -- TODO: ghci debugger
@@ -42,7 +42,7 @@ module Shlambda(
 
 -- checkout http://hackage.haskell.org/package/LambdaCalculator-0.2/src/LambdaCalculator.hs
 
-
+-- TELEGRAM API: https://core.telegram.org/bots/api#sendmessage
 import Text.Parsec (ParseError)
 import Text.Parsec.String (Parser)
 import Text.Parsec.Prim (parse)
@@ -298,7 +298,7 @@ limitTrace s = if length s < maxStackTraceSize then s else "..ommitted.. ..too b
 trimLongMessage :: Int -> String -> String
 trimLongMessage limit str = if length str < limit
                             then str
-                            else (take maxMessageSize str) ++ " ... <trimmed|"
+                            else take maxMessageSize str ++ " ... <trimmed|"
 
 singleStep :: HashMap String Expr -> String -> String
 singleStep hm s = either (\err -> "Can not parse input: " ++ show err) id myres
@@ -423,6 +423,7 @@ basicVals = HM.fromList [
   ("pz" , parseOrFail "λx.0"),
   ("pf" , parseOrFail "λg.λh.h (g succ)"),
   ("id" , parseOrFail "λx.x"),
+  ("const", parseOrFail "λx.λy.y"),
   ("ANotherPred" , parseOrFail "λn.n pf pz id"),
 
   ("pred" , parseOrFail "λn.λf.λx.n (λg.λh.h (g f)) (λ_.x) id"),
@@ -433,6 +434,7 @@ basicVals = HM.fromList [
   ("false" , parseOrFail "λx.λy.y"),
   ("if" , parseOrFail "λp.λc.λa.p c a"),
   ("&&" , parseOrFail "λa.λb.if a b false"),
+  ("||" , parseOrFail "λa.λb.if a true b"),
   ("!" , parseOrFail "λp.λa.λb.p b a"),
 
   ("0?" , parseOrFail "λn.n (λ_.false) true"),

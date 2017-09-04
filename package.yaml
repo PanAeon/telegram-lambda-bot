@@ -21,13 +21,13 @@ library:
     - src
 
 executables:
-  lambda-bot:
+  lambda-bot: 
     ghc-options: -Wall -O2 -rtsopts
     main: app/Main.hs
     dependencies:
       - lambda-bot
   lambda-repl:
-    ghc-options: -Wall -O2 -rtsopts 
+    ghc-options: -Wall -O2 -rtsopts
     main: repl/Main.hs
     dependencies:
       - lambda-bot
