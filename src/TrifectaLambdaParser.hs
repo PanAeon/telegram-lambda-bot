@@ -27,11 +27,11 @@ expr =
 
          variable
          <|> lambda
-         <|> (parens apply <?> "parens")
+         <|> (parens apply )
 
 
 apply :: (Monad m, TokenParsing m) => m Expr
-apply = foo <$> ( ws *> (many1 expr) <* ws) <?> "apply"
+apply = foo <$> ( ws *> (many1 expr) <* ws)
            where
             foo [x] = x
             foo xs  = foldl1 App xs
